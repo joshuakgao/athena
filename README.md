@@ -7,8 +7,9 @@ My attempt at a deep learning chess bot.
 ```bash
 conda create -n athena python=3.10 -y
 conda activate athena
-export LICHESS_TOKEN="YOUR_LICHESS_TOKEN_HERE"
 bash setup.sh
+
+python -m datasets.aegis.generate # this will take a while
 ```
 
 ## Demo on Lichess
