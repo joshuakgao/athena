@@ -1435,7 +1435,6 @@ def start_lichess_bot() -> None:
     logger.info(intro(), extra={"highlighter": None})
 
     CONFIG = load_config(args.config or "lichessbot/config.yml")
-    print(CONFIG.token)
     if not args.disable_auto_logging:
         with open(os.path.join(auto_log_directory, "config.log"), "w") as config_log:
             log_config(CONFIG.config, config_log.write)
