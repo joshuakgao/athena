@@ -1,4 +1,5 @@
 import json
+from collections import deque  # Add at the top of your file
 from pathlib import Path
 
 import chess
@@ -17,7 +18,6 @@ def generate():
     """
     data = {}
 
-    # Process each PGN file in the directory
     for pgn_path in Path(raw_dir).glob("*.pgn"):
         logger.info(f"Processing {pgn_path.name}...")
 
@@ -27,32 +27,41 @@ def generate():
                 if game is None:
                     break  # End of file
 
-                # default set to Lc0 0.27.0 elo
-                white_elo = game.headers.get("WhiteElo", 3404)
-                black_elo = game.headers.get("BlackElo", 3404)
+                # Default set to Lc0 0.27.0 elo
+                white_elo = int(game.headers.get("WhiteElo", 3404))
+                black_elo = int(game.headers.get("BlackElo", 3404))
+                white_bot = game.headers.get("White", "Unknown")
+                black_bot = game.headers.get("Black", "Unknown")
                 board = game.board()
+
+                # Use a deque as a reverse queue (newest FEN first)
+                last_seven_fens = deque(
+                    maxlen=7
+                )  # Automatically discards oldest when full
 
                 for move in game.mainline_moves():
                     # Get the FEN before the move is made
                     fen = board.fen()
-                    # Make the move on the board
-                    board.push(move)
+                    board.push(move)  # Make the move
 
                     if not is_fen_valid(fen):
                         continue
 
-                    # Get the next move in UCI format
                     next_move_uci = move.uci()
-                    active_color = fen.split()[1]  # Second field is the active color
+                    active_color = fen.split()[1]  # 'w' or 'b'
                     elo = white_elo if active_color == "w" else black_elo
+                    bot = white_bot if active_color == "w" else black_bot
 
-                    if fen not in data:
-                        data[fen] = {"best_move": next_move_uci, "elo": elo}
-                    else:
-                        # Only update best move if it is made by a stronger engine
-                        if elo > data[fen]["elo"]:
-                            data[fen]["elo"] = elo
-                            data[fen]["best_move"] = next_move_uci
+                    if fen not in data or elo > data[fen]["elo"]:
+                        data[fen] = {
+                            "best_move": next_move_uci,
+                            "elo": elo,
+                            "history": list(last_seven_fens),  # Already newest-first
+                            "bot": bot,
+                        }
+
+                    # Append new FEN to the front (reverse order)
+                    last_seven_fens.appendleft(fen)
 
     # Write the best move for each FEN to multiple JSONL files, each with up to one million lines
     output_dir = Path(dir)
@@ -63,7 +72,7 @@ def generate():
     jsonl_file = open(output_dir / f"shard_{file_index}.jsonl", "w")
 
     for fen, move_data in data.items():
-        jsonl_file.write(json.dumps({fen: move_data["best_move"]}) + "\n")
+        jsonl_file.write(json.dumps({fen: move_data}) + "\n")
         line_count += 1
 
         # If the current file reaches one million lines, start a new file
