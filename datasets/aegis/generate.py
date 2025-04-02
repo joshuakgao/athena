@@ -54,7 +54,7 @@ def generate():
                     elo = white_elo if active_color == "w" else black_elo
                     bot = white_bot if active_color == "w" else black_bot
 
-                    if elo > 3000:
+                    if elo > 2500:
                         entry = {
                             "fen": fen,
                             "best_move": next_move_uci,
