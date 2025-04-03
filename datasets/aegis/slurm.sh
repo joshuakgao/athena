@@ -3,7 +3,7 @@
 #SBATCH -o athena.o%j
 #SBATCH --ntasks-per-node=1 -N 1
 #SBATCH -t 5-96:0:0
-#SBATCH --mem-per-cpu=256GB
+#SBATCH --mem-per-cpu=64GB
 
 module add Miniforge3/py3.10
 module add cudatoolkit/12.4
