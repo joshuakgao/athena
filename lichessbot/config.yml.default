@@ -198,6 +198,7 @@ matchmaking:
     - 60
     - 180
   challenge_increment: # Increment in seconds of the challenge (to be chosen at random).
+    - 0
     - 1
     - 2
   #  challenge_days:                 # Days for correspondence challenge (to be chosen at random).
