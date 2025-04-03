@@ -3,13 +3,11 @@ import re
 from pathlib import Path
 
 import chess
-import chess.pgn
 import numpy as np
 import torch
 from torch.utils.data import Dataset
 
 from utils.chess_utils import column_letter_to_num, is_fen_valid, is_uci_valid
-from utils.logger import logger
 
 
 class AegisDataset(Dataset):
@@ -24,85 +22,65 @@ class AegisDataset(Dataset):
             with open(file_path, "r") as f:
                 for line in f:
                     data = json.loads(line.strip())
-                    fen = list(data.keys())[0]
-                    move = data[fen]
-                    self.data.append((fen, move))
+                    self.data.append(data)
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        x, y = self.data[idx]
-        x = self.encode_input([x])
-        y = self.encode_output([y])
+        data = self.data[idx]
+        fen = list(data.keys())[0]
+        history = data[fen]["history"]
+        best_move = data[fen]["best_move"]
+        x = self.encode_input([fen], [history])
+        y = self.encode_output([best_move])
         return x[0], y[0]
 
-    def encode_input(self, fens):
+    def encode_input(self, fens, histories):
         """Encode a batch of FEN strings into a batch of input tensors with shape (batch_size, 9, 8, 8)."""
         batch_size = len(fens)
         inputs = np.zeros((batch_size, 9, 8, 8), dtype=np.float32)
 
         types = ["p", "n", "b", "r", "q", "k"]
-        for i, fen in enumerate(fens):
+        for i, (fen, history) in enumerate(zip(fens, histories)):
             assert is_fen_valid(fen)
             board = chess.Board(fen)
+            layer_idx = 0
 
-            # Encode board position for each piece type
-            for t_idx, type in enumerate(types):
-                s = str(board)
-                s = re.sub(f"[^{type}{type.upper()} \n]", ".", s)
-                s = re.sub(f"{type}", "-1", s)
-                s = re.sub(f"{type.upper()}", "1", s)
-                s = re.sub(f"\.", "0", s)
-                board_mat = [[int(x) for x in row.split(" ")] for row in s.split("\n")]
-                inputs[i, t_idx, :, :] = np.array(board_mat)
+            for fen in [fen] + history:
+                # Encode board position for each piece type
+                for type in types:
+                    s = str(board)
+                    s = re.sub(f"[^{type}{type.upper()} \n]", ".", s)
+                    s = re.sub(f"{type}", "-1", s)
+                    s = re.sub(f"{type.upper()}", "1", s)
+                    s = re.sub(f"\.", "0", s)
+                    board_mat = [
+                        [int(x) for x in row.split(" ")] for row in s.split("\n")
+                    ]
+                    inputs[i, layer_idx, :, :] = np.array(board_mat)
+                    layer_idx += 1
 
-            fen_split = fen.split(" ")
-            turn, castling_rights, enpassant_rights = (
-                fen_split[1],
-                fen_split[2],
-                fen_split[3],
-            )
+                # Encode castling rights
+                castling_tensor = np.zeros((8, 8), dtype=np.int8)
+                if board.has_kingside_castling_rights(chess.WHITE):
+                    castling_tensor[7, 7] = 1
+                if board.has_queenside_castling_rights(chess.WHITE):
+                    castling_tensor[7, 0] = 1
+                if board.has_kingside_castling_rights(chess.BLACK):
+                    castling_tensor[0, 7] = -1
+                if board.has_queenside_castling_rights(chess.BLACK):
+                    castling_tensor[0, 0] = -1
+                inputs[i, layer_idx, :, :] = castling_tensor
+                layer_idx += 1
 
             # Encode turn
-            inputs[i, 6, :, :] = 1 if turn == "w" else -1
-
-            # Encode castling rights
-            castling_tensor = np.zeros((8, 8), dtype=np.int8)
-
-            # Define the squares for queenside and kingside castling for both white and black
-            white_queenside = (7, 0)
-            white_kingside = (7, 7)
-            black_queenside = (0, 0)
-            black_kingside = (0, 7)
-
-            if turn == "w":
-                # If white can castle kingside, set b1 to 1
-                if "K" in castling_rights:
-                    castling_tensor[white_kingside] = 1
-                # If white can castle queenside, set g1 to 1
-                if "Q" in castling_rights:
-                    castling_tensor[white_queenside] = 1
-
-            if turn == "b":
-                # If black can castle kingside, set b8 to -1
-                if "k" in castling_rights:
-                    castling_tensor[black_kingside] = -1
-
-                # If black can castle queenside, set g8 to -1
-                if "q" in castling_rights:
-                    castling_tensor[black_queenside] = -1
-
-            # Store the castling tensor at the correct place in the inputs array
-            inputs[i, 7, :, :] = castling_tensor
-
-            # Encode en passant rights
-            enpassant_tensor = np.zeros((8, 8), dtype=np.int8)
-            if enpassant_rights != "-":
-                file = ord(enpassant_rights[0]) - ord("a")
-                rank = 8 - int(enpassant_rights[1])
-                enpassant_tensor[rank, file] = 1 if rank == 5 else -1
-            inputs[i, 8, :, :] = enpassant_tensor
+            turn = board.turn
+            if turn == chess.WHITE:
+                inputs[i, layer_idx, :, :] = 1
+            else:
+                inputs[i, layer_idx, :, :] = -1
+            layer_idx += 1
 
         return torch.tensor(inputs)
 
@@ -125,69 +103,88 @@ class AegisDataset(Dataset):
         return torch.tensor(outputs)
 
     def decode_input(self, tensor):
-        """Decode a batch of input tensors (shape [batch_size, 9, 8, 8]) back to FEN strings."""
+        """Decode a batch of input tensors with shape (batch_size, 9, 8, 8) back into FEN strings and histories."""
         batch_size = tensor.shape[0]
         fens = []
+        histories = []
 
-        # Piece types in FEN order (pawn, knight, bishop, rook, queen, king)
-        piece_types = ["p", "n", "b", "r", "q", "k"]
+        types = ["p", "n", "b", "r", "q", "k"]
 
         for i in range(batch_size):
-            board = chess.Board(None)  # Create empty board
-            board.clear()  # Remove all pieces
+            # Get the input for this batch item
+            input_data = tensor[i].numpy()
+            layer_idx = 0
 
-            # Decode pieces (channels 0-5)
-            for t_idx, piece in enumerate(piece_types):
-                layer = tensor[i, t_idx].numpy()
-                for rank in range(8):
-                    for file in range(8):
-                        val = layer[rank, file]
-                        if val > 0.5:  # White piece
-                            board.set_piece_at(
-                                chess.square(file, 7 - rank),
-                                chess.Piece.from_symbol(piece.upper()),
-                            )
-                        elif val < -0.5:  # Black piece
-                            board.set_piece_at(
-                                chess.square(file, 7 - rank),
-                                chess.Piece.from_symbol(piece),
-                            )
+            # Initialize variables to store current position and history
+            current_fen = None
+            history_fens = []
 
-            # Decode turn (channel 6)
-            turn = "w" if tensor[i, 6, 0, 0] > 0 else "b"
+            # Process each position in the history (current + past positions)
+            while layer_idx < input_data.shape[0]:
+                board = chess.Board(None)  # Create empty board
+                board.clear()
 
-            # Decode castling rights (channel 7)
-            castling = ""
-            castling_layer = tensor[i, 7].numpy()
+                # Process piece layers
+                piece_map = {}
+                for piece_type in types:
+                    layer = input_data[layer_idx]
+                    for rank in range(8):
+                        for file in range(8):
+                            val = layer[
+                                7 - rank, file
+                            ]  # Convert to chess board coordinates
+                            if val == 1:  # White piece
+                                piece = piece_type.upper()
+                                square = chess.square(file, rank)
+                                piece_map[square] = piece
+                            elif val == -1:  # Black piece
+                                piece = piece_type
+                                square = chess.square(file, rank)
+                                piece_map[square] = piece
+                    layer_idx += 1
 
-            # Check white castling
-            if castling_layer[7, 7] > 0.5:  # White kingside (h1)
-                castling += "K"
-            if castling_layer[7, 0] > 0.5:  # White queenside (a1)
-                castling += "Q"
+                # Set pieces on board
+                for square, piece in piece_map.items():
+                    board.set_piece_at(square, chess.Piece.from_symbol(piece))
 
-            # Check black castling
-            if castling_layer[0, 7] < -0.5:  # Black kingside (h8)
-                castling += "k"
-            if castling_layer[0, 0] < -0.5:  # Black queenside (a8)
-                castling += "q"
+                # Process castling rights
+                castling_layer = input_data[layer_idx]
+                layer_idx += 1
 
-            castling = castling if castling else "-"
+                # White kingside
+                if castling_layer[7, 7] == 1:
+                    board.castling_rights |= chess.BB_H1
+                # White queenside
+                if castling_layer[7, 0] == 1:
+                    board.castling_rights |= chess.BB_A1
+                # Black kingside
+                if castling_layer[0, 7] == -1:
+                    board.castling_rights |= chess.BB_H8
+                # Black queenside
+                if castling_layer[0, 0] == -1:
+                    board.castling_rights |= chess.BB_A8
 
-            # Decode en passant (channel 8)
-            enpassant_layer = tensor[i, 8].numpy()
-            ep_square = "-"
-            for rank in range(8):
-                for file in range(8):
-                    if abs(enpassant_layer[rank, file]) > 0.5:
-                        ep_square = chr(ord("a") + file) + str(8 - rank)
-                        break
+                # Process turn (last layer)
+                if layer_idx < input_data.shape[0]:
+                    turn_layer = input_data[layer_idx]
+                    if turn_layer[0, 0] == 1:  # White to move
+                        board.turn = chess.WHITE
+                    else:  # Black to move
+                        board.turn = chess.BLACK
+                    layer_idx += 1
 
-            # Construct FEN
-            fen = f"{board.board_fen()} {turn} {castling} {ep_square} 0 1"
-            fens.append(fen)
+                # Get FEN for this position
+                fen = board.fen()
 
-        return fens
+                if current_fen is None:
+                    current_fen = fen
+                else:
+                    history_fens.append(fen)
+
+            fens.append(current_fen)
+            histories.append(history_fens)
+
+        return fens, histories
 
     def decode_output(self, tensor):
         """Decode policy output tensor (shape [2, 8, 8]) to a single UCI move."""
@@ -205,8 +202,3 @@ class AegisDataset(Dataset):
         to_rank = str(8 - to_square[0])
 
         return f"{from_file}{from_rank}{to_file}{to_rank}"
-
-
-if __name__ == "__main__":
-    aegis = AegisDataset()
-    aegis.generate()
