@@ -39,7 +39,7 @@ class AegisDataset(Dataset):
     def encode_input(self, fens, histories):
         """Encode a batch of FEN strings into a batch of input tensors with shape (batch_size, 9, 8, 8)."""
         batch_size = len(fens)
-        inputs = np.zeros((batch_size, 9, 8, 8), dtype=np.float32)
+        inputs = np.zeros((batch_size, 52, 8, 8), dtype=np.float32)
 
         types = ["p", "n", "b", "r", "q", "k"]
         for i, (fen, history) in enumerate(zip(fens, histories)):
@@ -74,12 +74,37 @@ class AegisDataset(Dataset):
                 inputs[i, layer_idx, :, :] = castling_tensor
                 layer_idx += 1
 
+            # Encode repetition
+            repetition_count = 0
+            if board.is_repetition(count=1):
+                repetition_count = 1
+            elif board.is_repetition(count=2):
+                repetition_count = 2
+            elif board.is_repetition(count=3):
+                repetition_count = 3
+            elif board.is_repetition(count=4):
+                repetition_count = 4
+            elif board.is_repetition(count=5):
+                repetition_count = 5
+            elif board.is_repetition(count=6):
+                repetition_count = 6
+            elif board.is_repetition(count=7):
+                repetition_count = 7
+            inputs[i, layer_idx, :, :] = np.full(
+                (8, 8), repetition_count, dtype=np.int8
+            )
+            layer_idx += 1
+
             # Encode turn
             turn = board.turn
             if turn == chess.WHITE:
                 inputs[i, layer_idx, :, :] = 1
             else:
                 inputs[i, layer_idx, :, :] = -1
+            layer_idx += 1
+
+            # Encode board
+            inputs[i, layer_idx, :, :] = np.ones((8, 8), dtype=np.int8)
             layer_idx += 1
 
         return torch.tensor(inputs)
