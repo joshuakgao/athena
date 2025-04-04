@@ -1,16 +1,15 @@
 import json
 import shutil
-import tempfile
 from collections import defaultdict, deque
 from pathlib import Path
-from tqdm import tqdm
 
 import chess
 import chess.pgn
+import psutil
+from tqdm import tqdm
 
 from utils.chess_utils import is_fen_valid
 from utils.logger import logger
-import psutil
 
 raw_dir = "datasets/aegis/raw_data"
 dir = "datasets/aegis/data"
@@ -21,14 +20,16 @@ def generate():
     output_dir.mkdir(parents=True, exist_ok=True)
 
     # Use a temporary directory for intermediate files
-    temp_dir = Path(tempfile.mkdtemp())
+    temp_dir = Path("datasets/aegis/temp")
+    temp_dir.mkdir(parents=True, exist_ok=True)
 
     # --- FIRST PASS: Write all FENs to temp files ---
     temp_file_index = 0
     temp_line_count = 0
     temp_jsonl = open(temp_dir / f"temp_{temp_file_index}.jsonl", "w")
 
-    for pgn_path in Path(raw_dir).glob("*.pgn"):
+    pgn_files = list(Path(raw_dir).glob("*.pgn"))
+    for pgn_path in tqdm(pgn_files):
         logger.info(f"Processing {pgn_path.name}...")
 
         with open(pgn_path) as pgn_file:
