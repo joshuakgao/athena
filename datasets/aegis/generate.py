@@ -3,12 +3,14 @@ import shutil
 import tempfile
 from collections import defaultdict, deque
 from pathlib import Path
+from tqdm import tqdm
 
 import chess
 import chess.pgn
 
 from utils.chess_utils import is_fen_valid
 from utils.logger import logger
+import psutil
 
 raw_dir = "datasets/aegis/raw_data"
 dir = "datasets/aegis/data"
@@ -79,8 +81,15 @@ def generate():
 
     # --- SECOND PASS: Deduplicate and keep highest ELO ---
     fen_entries = defaultdict(dict)  # {fen: {"best_move": ..., "elo": ..., ...}}
+    temp_files = list(temp_dir.glob("temp_*.jsonl"))
+    logger.info(f"Number of temporary files: {len(temp_files)}")
+    process = psutil.Process()
 
-    for temp_file in temp_dir.glob("temp_*.jsonl"):
+    for temp_file in tqdm(temp_files):
+        logger.info(f"Processing temporary file {temp_file.name} for deduplication...")
+        logger.info(
+            f"Memory usage before processing {temp_file.name}: {process.memory_info().rss / (1024 * 1024):.2f} MB"
+        )
         with open(temp_file) as f:
             for line in f:
                 entry = json.loads(line)
@@ -94,6 +103,8 @@ def generate():
                         "history": entry["history"],
                         "bot": entry["bot"],
                     }
+
+    logger.info(f"Deduplication complete. Total unique FENs: {len(fen_entries)}")
 
     # --- Write final deduplicated JSONL files ---
     file_index = 0
