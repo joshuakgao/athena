@@ -2,21 +2,21 @@
 pip install -r requirements.txt
 pip install -r lichessbot/requirements.txt
 
-# Install stockfish
-OS=$(uname -s) # Get the OS name
-if [ "$OS" = "Linux" ]; then
-    sudo apt install stockfish
-elif [ "$OS" = "Darwin" ]; then
-    brew install stockfish
-else
-    echo "This is an unknown or unsupported system: $OS"
-fi
+# # Install stockfish
+# OS=$(uname -s) # Get the OS name
+# if [ "$OS" = "Linux" ]; then
+#     sudo apt install stockfish
+# elif [ "$OS" = "Darwin" ]; then
+#     brew install stockfish
+# else
+#     echo "This is an unknown or unsupported system: $OS"
+# fi
 
 # Install p7zip
 # Install stockfish
 OS=$(uname -s) # Get the OS name
 if [ "$OS" = "Linux" ]; then
-    sudo apt install p7zip
+    sudo apt install p7zip-full
 elif [ "$OS" = "Darwin" ]; then
     brew install p7zip
 else

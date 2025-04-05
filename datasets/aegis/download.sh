@@ -1,4 +1,7 @@
-!/bin/bash
+wget https://www.computerchess.org.uk/ccrl/404/CCRL-404.[1542299].pgn.7z -P datasets/aegis/raw_data/
+7z x datasets/aegis/raw_data/CCRL-404.\[1542299\].pgn.7z -odatasets/aegis/raw_data/
+rm datasets/aegis/raw_data/CCRL-404.\[1542299\].pgn.7z
+mv datasets/aegis/raw_data/CCRL-404.\[1542299\].pgn datasets/aegis/raw_data/ccrl.pgn
 
 curl -L -o datasets/aegis/raw_data/leela-chess-zero-self-play-chess-games-dataset-1.zip\
   https://www.kaggle.com/api/v1/datasets/download/anthonytherrien/leela-chess-zero-self-play-chess-games-dataset-1
@@ -49,11 +52,6 @@ for file in datasets/aegis/raw_data/*.zip; do
     unzip -o "$file" -d datasets/aegis/raw_data/
     rm "$file"
 done
-
-wget https://www.computerchess.org.uk/ccrl/404/CCRL-404.[1542299].pgn.7z -P datasets/aegis/raw_data/
-7z x datasets/aegis/raw_data/CCRL-404.\[1542299\].pgn.7z -odatasets/aegis/raw_data/
-rm datasets/aegis/raw_data/CCRL-404.\[1542299\].pgn.7z
-mv datasets/aegis/raw_data/CCRL-404.\[1542299\].pgn datasets/aegis/raw_data/ccrl.pgn
 
 curl -L -o datasets/aegis/raw_data/gm-games-chesscom.zip\
   https://www.kaggle.com/api/v1/datasets/download/dimitrioskourtikakis/gm-games-chesscom

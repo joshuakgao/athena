@@ -1,10 +1,13 @@
 import csv
 import math
+from tqdm import tqdm
 
 # Input CSV file and output directory
 csv_file = "datasets/aegis/raw_data/GM_games_dataset.csv"
 output_dir = "datasets/aegis/raw_data/"
 num_files = 20  # Number of files to split into
+
+print("Counting total games...")
 
 # First pass to count total games
 with open(csv_file, mode="r", encoding="utf-8") as file:
@@ -17,7 +20,7 @@ games_per_file = math.ceil(total_games / num_files)
 with open(csv_file, mode="r", encoding="utf-8") as file:
     reader = csv.DictReader(file)
 
-    for file_num in range(num_files):
+    for file_num in tqdm(range(num_files)):
         output_file = f"{output_dir}GM_games_{file_num+1}.pgn"
         start_idx = file_num * games_per_file
         end_idx = start_idx + games_per_file
