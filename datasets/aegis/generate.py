@@ -29,7 +29,7 @@ output_dir_path = Path(dir)
 rows_per_temp_parquet_write = (
     1_000_000  # How many rows to batch before writing a temp parquet file
 )
-positions_per_shard = 1_000_000  # Rows per final parquet shard
+positions_per_shard = 10_000_000  # Rows per final parquet shard
 min_elo_threshold = 2500
 sort_memory = "4G"
 sort_parallelism = 4
