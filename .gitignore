@@ -7,4 +7,4 @@ wandb/
 nohup.out
 *.o*
 daily_challenge_times.txt
-datasets/aegis/temp
+datasets/aegis/temp_parquet
