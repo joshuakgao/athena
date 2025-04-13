@@ -1,5 +1,7 @@
 import json
+import os
 import subprocess
+import sys
 import time  # For potential delays if needed
 import traceback  # Import traceback module
 from collections import deque
@@ -13,11 +15,9 @@ import psutil
 import pyarrow as pa
 import pyarrow.parquet as pq
 from tqdm import tqdm
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from utils.logger import logger
-
-
-# --- END MOCKING ---
-
 
 # --- Configuration ---
 raw_dir = "datasets/aegis/raw_data"
@@ -31,9 +31,14 @@ rows_per_temp_parquet_write = (
 )
 positions_per_shard = 10_000_000  # Rows per final parquet shard
 min_elo_threshold = 2500
-sort_memory = "4G"
-sort_parallelism = 4
-sort_temp_dir = None
+
+# Calculate 90% of available memory
+available_memory = psutil.virtual_memory().available
+sort_memory = f"{int(available_memory * 0.9 / (1024 ** 3))}G"  # Convert to GB
+
+# Use all available workers for sorting
+sort_parallelism = psutil.cpu_count(logical=True)
+sort_temp_dir = "datasets/aegis/sort_temp"
 
 # Define PyArrow schema for consistency (optional but recommended)
 # Helps ensure data types are correct and consistent across files.
@@ -408,13 +413,6 @@ def generate():
                             )
                             raise  # Re-raise to stop processing
 
-                    # Memory check (optional)
-                    if input_count_sort % 10 == 0:
-                        mem_mb = process.memory_info().rss / (1024 * 1024)
-                        logger.debug(
-                            f"Fed {input_count_sort:,} lines. Python Proc Mem: {mem_mb:.2f} MB"
-                        )
-
                 except Exception as read_e:
                     logger.error(
                         f"Failed to read or process {temp_file_path}: {read_e}"
@@ -612,7 +610,6 @@ def generate():
         if sort_proc and sort_proc.poll() is None:
             logger.warning("Attempting to terminate sort process due to error...")
             stderr_data_on_except = ""
-            # ...(rest of the sort process termination logic - unchanged)
             if sort_proc.stderr and not sort_proc.stderr.closed:
                 try:
                     stderr_data_on_except = sort_proc.stderr.read()
@@ -692,51 +689,6 @@ def generate():
     #     #     logger.warning(f"Could not remove temporary directory: {e}")
     # except Exception as e:
     #      logger.error(f"Error during temporary file cleanup: {e}")
-
-
-def validate(fen, history):
-    # Convert history to tuple of FEN strings for consistent comparison
-    count = 0
-
-    aegis = sorted(output_dir_path.glob("*.parquet"))
-    for parquet_file in tqdm(aegis):
-        print(f"Current count: {count}")  # More informative progress
-        try:
-            df = pq.read_table(parquet_file).to_pandas()
-
-            # First filter by the current FEN (fast string comparison)
-            fen_matches = df[df["fen"] == fen]
-
-            # Then compare histories
-            for _, row in fen_matches.iterrows():
-                print(row["fen"])
-                # Ensure we're comparing tuples of FEN strings
-                stored_history = row["history"]
-                print(stored_history)
-                print(history)
-                if list(stored_history) == history:
-                    count += 1
-                    if count > 1:
-                        logger.warning(
-                            f"Duplicate entry found in {parquet_file}:\n"
-                            f"FEN: {fen}\n"
-                            f"History: {history}"
-                        )
-                        return False  # Early exit if duplicate found
-
-        except Exception as e:
-            logger.error(f"Error processing {parquet_file}: {e}")
-            continue  # Skip to next file if error occurs
-
-    # Return validation result
-    if count == 1:
-        return True
-    elif count == 0:
-        logger.warning("No matching entry found in any parquet file")
-        return False
-    else:
-        logger.warning(f"Found {count} duplicate entries")
-        return False
 
 
 if __name__ == "__main__":
