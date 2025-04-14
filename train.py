@@ -33,8 +33,8 @@ dataset_size = len(dataset)
 test_size = int(TEST_SPLIT_RATIO * dataset_size)
 train_size = dataset_size - test_size
 iters_in_an_epoch = max(len(dataset) // BATCH_SIZE, 1)
-EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 1_000, 1)
-CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 10_000, 1)
+EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 100_000, 1)
+CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 1_000_000, 1)
 LR_DECAY_STEPS = iters_in_an_epoch
 
 

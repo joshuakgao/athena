@@ -5,7 +5,7 @@
     "lr": 0.00006,
     "lr_decay_rate": 0.95,
     "batch_size": 256,
-    "test_split_ratio": 0.00001,
+    "test_split_ratio": 0.0001,
     "use_wandb": true,
     "num_res_blocks": 19
 }
