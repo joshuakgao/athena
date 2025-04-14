@@ -1,9 +1,10 @@
 import json
 import os
+import random
 import subprocess
 import sys
-import time  # For potential delays if needed
-import traceback  # Import traceback module
+import time
+import traceback
 from collections import deque
 from pathlib import Path
 
@@ -22,31 +23,28 @@ from utils.logger import logger
 # --- Configuration ---
 raw_dir = "datasets/aegis/raw_data"
 dir = "datasets/aegis/data"
-temp_dir_path = Path("datasets/aegis/temp_parquet")  # Changed temp dir name
+temp_dir_path = Path("datasets/aegis/temp_parquet")
 output_dir_path = Path(dir)
-# Adjust batch sizes based on memory constraints when converting to DataFrames
-# This replaces positions_per_temp_file for writing parquet
-rows_per_temp_parquet_write = (
-    1_000_000  # How many rows to batch before writing a temp parquet file
-)
-positions_per_shard = 10_000_000  # Rows per final parquet shard
+test_output_path = output_dir_path / "test.parquet"  # Path for test set
+rows_per_temp_parquet_write = 1_000_000
+positions_per_shard = 10_000_000
 min_elo_threshold = 2500
+test_sample_size = 10_000  # Number of samples for test set
 
 # Calculate 90% of available memory
 available_memory = psutil.virtual_memory().available
-sort_memory = f"{int(available_memory * 0.9 / (1024 ** 3))}G"  # Convert to GB
+sort_memory = f"{int(available_memory * 0.9 / (1024 ** 3))}G"
 
 # Use all available workers for sorting
 sort_parallelism = psutil.cpu_count(logical=True)
 sort_temp_dir = "datasets/aegis/sort_temp"
 
-# Define PyArrow schema for consistency (optional but recommended)
-# Helps ensure data types are correct and consistent across files.
+# Define PyArrow schema for consistency
 ARROW_SCHEMA = pa.schema(
     [
         ("fen", pa.string()),
         ("best_move", pa.string()),
-        ("elo", pa.int32()),  # Use int32 for ELO
+        ("elo", pa.int32()),
         ("history", pa.list_(pa.string())),
         ("bot", pa.string()),
     ]
@@ -90,12 +88,12 @@ def write_batch_to_parquet(batch, file_path, schema):
         table = pa.Table.from_pandas(df, schema=schema, preserve_index=False)
         pq.write_table(table, file_path)
         written_count = len(batch)
-        batch.clear()  # Clear the batch after writing
+        batch.clear()
         return written_count
     except Exception as e:
         logger.error(f"Error writing batch to {file_path}: {e}")
         logger.error(f"Problematic batch (first few items): {batch[:5]}")
-        raise  # Re-raise the error to potentially stop the process
+        raise
 
 
 def generate():
@@ -113,8 +111,8 @@ def generate():
         logger.info(
             "No temporary Parquet files found. Starting First Pass: Processing PGNs..."
         )
-        temp_file_index = 709
-        current_temp_batch = []  # Accumulate records here
+        temp_file_index = 0
+        current_temp_batch = []
         total_written_to_temp = 0
 
         pgn_files = sorted(list(Path(raw_dir).glob("*.pgn")))
@@ -125,9 +123,7 @@ def generate():
         for pgn_path in tqdm(pgn_files, desc="Processing PGN files"):
             logger.info(f"Processing {pgn_path.name}...")
             games_in_file = 0
-            positions_in_file_batch = (
-                0  # Positions added to current batch from this file
-            )
+            positions_in_file_batch = 0
 
             try:
                 with open(pgn_path, errors="replace") as pgn_file:
@@ -154,17 +150,13 @@ def generate():
                                 white_elo = "3404"
                             else:
                                 white_elo = game.headers.get("WhiteElo", "0")
-                                white_elo = (
-                                    int(white_elo) if white_elo.strip() else 0
-                                )  # Handle empty strings
+                                white_elo = int(white_elo) if white_elo.strip() else 0
 
                             if black_bot == "Lc0":
                                 black_elo = "3404"
                             else:
                                 black_elo = game.headers.get("BlackElo", "0")
-                                black_elo = (
-                                    int(black_elo) if black_elo.strip() else 0
-                                )  # Handle empty strings
+                                black_elo = int(black_elo) if black_elo.strip() else 0
 
                         except ValueError as e:
                             logger.warning(
@@ -193,7 +185,6 @@ def generate():
                                     logger.debug(f"Skipping invalid FEN: {fen}")
                                     continue
 
-                                # format fen to remove en passant and move counter
                                 fen_split = fen.split()
                                 fen_split[3] = "-"
                                 fen_split[4] = "0"
@@ -217,7 +208,6 @@ def generate():
                                     positions_in_file_batch += 1
                                     input_positions_estimate += 1
 
-                                    # Write batch to Parquet if size threshold reached
                                     if (
                                         len(current_temp_batch)
                                         >= rows_per_temp_parquet_write
@@ -237,9 +227,7 @@ def generate():
                                         total_written_to_temp += written
                                         temp_file_index += 1
 
-                                last_seven_fens.appendleft(
-                                    fen
-                                )  # History is FENs *before* the current one
+                                last_seven_fens.appendleft(fen)
 
                         except Exception as e:
                             logger.warning(
@@ -259,7 +247,6 @@ def generate():
                 f"Finished {pgn_path.name}. Games processed: {games_in_file}. Positions added to batch: {positions_in_file_batch}."
             )
 
-        # Write any remaining records in the last batch
         if current_temp_batch:
             temp_file_path = temp_dir_path / f"temp_{temp_file_index}.parquet"
             written = write_batch_to_parquet(
@@ -299,10 +286,15 @@ def generate():
     black_stats = RunningStats()
     overall_stats = RunningStats()
 
-    current_shard_batch = []  # Accumulate records for the current output shard
+    current_shard_batch = []
     shard_index = 0
     total_positions_final = 0
     input_count_sort = 0
+
+    # Initialize test set collection
+    test_set = []
+    test_set_size = 0
+    test_set_keys = set()  # To track which keys are in test set
 
     sort_command = [
         "sort",
@@ -337,10 +329,7 @@ def generate():
             for temp_file_path in tqdm(temp_files, desc="Feeding temp files"):
                 logger.debug(f"Processing temp file: {temp_file_path}")
                 try:
-                    # Read entire temp parquet file (adjust if memory is an issue)
-                    # Consider pq.ParquetFile(temp_file_path).iter_batches(batch_size=...)
                     table = pq.read_table(temp_file_path)
-                    # Convert to pandas DataFrame for easier row iteration
                     df = table.to_pandas()
 
                     for _, row in df.iterrows():
@@ -350,10 +339,8 @@ def generate():
                             if "history" in entry_dict:
                                 history_value = entry_dict["history"]
                                 if isinstance(history_value, np.ndarray):
-                                    # Convert numpy array to Python list
                                     entry_dict["history"] = history_value.tolist()
                                 elif not isinstance(history_value, list):
-                                    # If it's not an ndarray or list, maybe log warning or force to list
                                     logger.warning(
                                         f"History field in {temp_file_path} is not a list or ndarray: {type(history_value)}. Attempting conversion or defaulting to empty list."
                                     )
@@ -362,21 +349,15 @@ def generate():
                                     except TypeError:
                                         entry_dict["history"] = []
                             else:
-                                entry_dict["history"] = (
-                                    []
-                                )  # Ensure history key exists as a list
+                                entry_dict["history"] = []
                             fen = entry_dict["fen"]
                             history_list = entry_dict["history"]
                             history_str = "|".join(history_list)
                             elo = entry_dict["elo"]
 
-                            # Serialize the original dictionary to JSON to pass through sort
-                            # Ensure ensure_ascii=False if you have non-ASCII in 'bot' names
                             original_json_str = json.dumps(
                                 entry_dict, ensure_ascii=False
                             )
-
-                            # Output format: FEN \t HistoryStr \t ELO \t OriginalJSON \n
                             tsv_line = (
                                 f"{fen}\t{history_str}\t{elo}\t{original_json_str}\n"
                             )
@@ -411,14 +392,13 @@ def generate():
                                 f"Unexpected error writing to sort stdin for row {row}: {e}",
                                 exc_info=False,
                             )
-                            raise  # Re-raise to stop processing
+                            raise
 
                 except Exception as read_e:
                     logger.error(
                         f"Failed to read or process {temp_file_path}: {read_e}"
                     )
-                    # Decide whether to skip the file or stop
-                    continue  # Skip this temp file
+                    continue
 
         finally:
             if sort_proc and sort_proc.stdin:
@@ -441,9 +421,7 @@ def generate():
         # --- Process the sorted output ---
         current_key = None
         current_max_elo = -1
-        current_best_line_json = (
-            None  # This now holds the JSON string of the best record
-        )
+        current_best_line_json = None
 
         output_start_time = time.time()
         output_progress = tqdm(
@@ -452,6 +430,11 @@ def generate():
             unit=" lines",
             mininterval=2.0,
         )
+
+        # Calculate sampling rate based on estimated total positions
+        # We'll adjust this dynamically as we see more positions
+        sampling_rate = test_sample_size / max(input_count_sort, 1)
+        logger.info(f"Initial test set sampling rate: {sampling_rate:.6f}")
 
         for sorted_line in output_progress:
             try:
@@ -462,7 +445,7 @@ def generate():
                     )
                     continue
                 fen, history_str, elo_str, original_json_str = parts
-                elo = int(elo_str)  # Use ELO from TSV for comparison
+                elo = int(elo_str)
                 key = (fen, history_str)
             except ValueError as e:
                 logger.warning(
@@ -478,74 +461,98 @@ def generate():
             if key == current_key:
                 if elo > current_max_elo:
                     current_max_elo = elo
-                    current_best_line_json = original_json_str  # Keep the JSON string
+                    current_best_line_json = original_json_str
             else:
                 # New key: Process the best entry for the previous key
                 if current_key is not None and current_best_line_json is not None:
                     try:
-                        # Parse the JSON to get the full record dictionary
                         best_entry_dict = json.loads(current_best_line_json)
 
-                        # Add the best dictionary to the current shard batch
-                        current_shard_batch.append(best_entry_dict)
-                        total_positions_final += 1
+                        # Decide whether to add to test set or training set
+                        if (
+                            test_set_size < test_sample_size
+                            and random.random() < sampling_rate
+                            and current_key not in test_set_keys
+                        ):
+                            # Add to test set
+                            test_set.append(best_entry_dict)
+                            test_set_keys.add(current_key)
+                            test_set_size += 1
 
-                        # Update stats using the max ELO found (which is in best_entry_dict)
-                        stat_elo = best_entry_dict[
-                            "elo"
-                        ]  # Use ELO from the record itself
-                        color = best_entry_dict["fen"].split(" ")[1]
-                        if color == "w":
-                            white_stats.update(stat_elo)
+                            # Adjust sampling rate based on remaining needed and remaining positions
+                            remaining_needed = test_sample_size - test_set_size
+                            remaining_positions = (
+                                input_count_sort - total_positions_final
+                            )
+                            if remaining_positions > 0 and remaining_needed > 0:
+                                sampling_rate = remaining_needed / remaining_positions
                         else:
-                            black_stats.update(stat_elo)
-                        overall_stats.update(stat_elo)
+                            # Add to training set
+                            current_shard_batch.append(best_entry_dict)
+                            total_positions_final += 1
 
-                        # Handle sharding: Write Parquet file when batch is full
-                        if len(current_shard_batch) >= positions_per_shard:
-                            shard_file_path = (
-                                output_dir_path / f"shard_{shard_index}.parquet"
-                            )
-                            written = write_batch_to_parquet(
-                                current_shard_batch, shard_file_path, ARROW_SCHEMA
-                            )
-                            logger.info(
-                                f"Written output shard {shard_index} to {shard_file_path.name} ({written} records)"
-                            )
-                            shard_index += 1
-                            output_progress.set_description(
-                                f"Reducing sorted data (Shard {shard_index})"
-                            )
+                            # Update stats
+                            stat_elo = best_entry_dict["elo"]
+                            color = best_entry_dict["fen"].split(" ")[1]
+                            if color == "w":
+                                white_stats.update(stat_elo)
+                            else:
+                                black_stats.update(stat_elo)
+                            overall_stats.update(stat_elo)
+
+                            # Handle sharding
+                            if len(current_shard_batch) >= positions_per_shard:
+                                shard_file_path = (
+                                    output_dir_path / f"shard_{shard_index}.parquet"
+                                )
+                                written = write_batch_to_parquet(
+                                    current_shard_batch, shard_file_path, ARROW_SCHEMA
+                                )
+                                logger.info(
+                                    f"Written output shard {shard_index} to {shard_file_path.name} ({written} records)"
+                                )
+                                shard_index += 1
+                                output_progress.set_description(
+                                    f"Reducing sorted data (Shard {shard_index})"
+                                )
 
                     except (json.JSONDecodeError, KeyError, IndexError) as e:
                         logger.warning(
                             f"Could not process best entry for key {current_key}: {e} - JSON: {current_best_line_json[:100]}..."
                         )
-                    except (
-                        Exception
-                    ) as e:  # Catch potential write_batch_to_parquet errors
+                    except Exception as e:
                         logger.error(f"Error writing shard {shard_index}: {e}")
-                        raise  # Stop processing if shard writing fails
+                        raise
 
                 # Reset for the new key
                 current_key = key
                 current_max_elo = elo
                 current_best_line_json = original_json_str
 
-        # --- After loop: Process the very last best entry ---
+        # Process the very last best entry
         if current_key is not None and current_best_line_json is not None:
             try:
                 best_entry_dict = json.loads(current_best_line_json)
-                current_shard_batch.append(best_entry_dict)
-                total_positions_final += 1
 
-                stat_elo = best_entry_dict["elo"]
-                color = best_entry_dict["fen"].split(" ")[1]
-                if color == "w":
-                    white_stats.update(stat_elo)
+                # Decide test vs train for last entry
+                if (
+                    test_set_size < test_sample_size
+                    and random.random() < sampling_rate
+                    and current_key not in test_set_keys
+                ):
+                    test_set.append(best_entry_dict)
+                    test_set_size += 1
                 else:
-                    black_stats.update(stat_elo)
-                overall_stats.update(stat_elo)
+                    current_shard_batch.append(best_entry_dict)
+                    total_positions_final += 1
+
+                    stat_elo = best_entry_dict["elo"]
+                    color = best_entry_dict["fen"].split(" ")[1]
+                    if color == "w":
+                        white_stats.update(stat_elo)
+                    else:
+                        black_stats.update(stat_elo)
+                    overall_stats.update(stat_elo)
 
             except (json.JSONDecodeError, KeyError, IndexError) as e:
                 logger.warning(
@@ -566,6 +573,15 @@ def generate():
             )
             logger.info(
                 f"Written final output shard {shard_index} to {shard_file_path.name} ({written} records)"
+            )
+
+        # Write the test set to a separate file
+        if test_set:
+            test_written = write_batch_to_parquet(
+                test_set, test_output_path, ARROW_SCHEMA
+            )
+            logger.info(
+                f"Written test set with {test_written} records to {test_output_path}"
             )
 
         # --- Check Sort Process Exit Status ---
@@ -605,7 +621,6 @@ def generate():
             f"An error occurred during the second pass: {e}\n{traceback.format_exc()}"
         )
         logger.error(error_message)
-        # No explicit output file handle to close here, batches are handled internally
 
         if sort_proc and sort_proc.poll() is None:
             logger.warning("Attempting to terminate sort process due to error...")
@@ -648,16 +663,19 @@ def generate():
     logger.info(
         f"Second Pass complete. Total unique positions written: {total_positions_final:,}"
     )
+    logger.info(f"Test set size: {len(test_set)}")
     logger.info(
         f"Final Python Proc memory usage: {final_mem_mb:.2f} MB (Delta: {final_mem_mb - initial_mem_mb:.2f} MB)"
     )
 
-    # Prepare metadata (remains JSON)
+    # Prepare metadata
     metadata = {
         "pgn_games_parsed": total_games if total_games > 0 else "Skipped or N/A",
         "total_positions": total_positions_final,
+        "test_set_size": len(test_set),
+        "train_set_size": total_positions_final - len(test_set),
         "min_elo": min_elo_threshold,
-        "positions_per_shard": positions_per_shard,  # Note: This is the target, actual might vary slightly
+        "positions_per_shard": positions_per_shard,
         "white_elo_stats": white_stats.to_dict(),
         "black_elo_stats": black_stats.to_dict(),
         "overall_elo_stats": overall_stats.to_dict(),
@@ -673,22 +691,7 @@ def generate():
 
     logger.info("--- Processing Finished ---")
     logger.info(f"Final sharded Parquet data written to: {output_dir_path}")
-
-    # Optional: Clean up temp parquet files
-    # logger.info("Cleaning up temporary Parquet files...")
-    # cleanup_count = 0
-    # try:
-    #     for temp_file in temp_dir_path.glob("temp_*.parquet"):
-    #         temp_file.unlink()
-    #         cleanup_count += 1
-    #     logger.info(f"Removed {cleanup_count} temporary Parquet files.")
-    #     # try:
-    #     #     temp_dir_path.rmdir()
-    #     #     logger.info("Removed temporary directory.")
-    #     # except OSError as e:
-    #     #     logger.warning(f"Could not remove temporary directory: {e}")
-    # except Exception as e:
-    #      logger.error(f"Error during temporary file cleanup: {e}")
+    logger.info(f"Test set written to: {test_output_path}")
 
 
 if __name__ == "__main__":

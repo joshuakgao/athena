@@ -24,4 +24,4 @@ conda activate athena
 
 cd ~/athena
 free -h
-~/.conda/envs/athena/bin/python -m datasets.aegis.generate
+~/.conda/envs/athena/bin/python datasets/aegis/generate.py
