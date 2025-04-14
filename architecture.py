@@ -1,11 +1,10 @@
-import re
-import chess.pgn
-import numpy as np
-import torch
+import os
+import sys
+
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils.chess_utils import column_letter_to_num, is_fen_valid, is_uci_valid
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from utils.device_selector import device_selector
 
 
@@ -26,7 +25,7 @@ class ResidualBlock(nn.Module):
 
 
 class Athena(nn.Module):
-    def __init__(self, input_channels=9, num_res_blocks=19, device="auto"):
+    def __init__(self, input_channels=62, num_res_blocks=19, device="auto"):
         super(Athena, self).__init__()
         self.device = device_selector(device, label="Athena")
 

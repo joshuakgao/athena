@@ -1,14 +1,17 @@
 import json
 import os
+import sys
 
 import torch
 import torch.nn.functional as F
+import wandb
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
-import wandb
 from architecture import Athena
 from datasets.aegis.dataset import AegisDataset
+
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from utils.logger import logger
 
 # Get training configs
@@ -30,8 +33,8 @@ dataset_size = len(dataset)
 test_size = int(TEST_SPLIT_RATIO * dataset_size)
 train_size = dataset_size - test_size
 iters_in_an_epoch = max(len(dataset) // BATCH_SIZE, 1)
-EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 10, 1)
-CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 100, 1)
+EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 1_000, 1)
+CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 10_000, 1)
 LR_DECAY_STEPS = iters_in_an_epoch
 
 
@@ -48,7 +51,7 @@ train_dataloader = DataLoader(
 test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
 # Create the model, loss function, and optimizer
-model = Athena(input_channels=9, num_res_blocks=NUM_RES_BLOCKS)
+model = Athena(input_channels=62, num_res_blocks=NUM_RES_BLOCKS)
 model.to(model.device)
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(
@@ -91,7 +94,7 @@ def eval_model(model, test_dataloader):
     total_loss = 0
 
     with torch.no_grad():
-        for X, Y in test_dataloader:
+        for X, Y, fens, best_moves in test_dataloader:
             batch_size = X.size(0)  # Get actual batch size for this batch
             X = X.to(model.device)
             Y = Y.to(model.device)
@@ -103,6 +106,12 @@ def eval_model(model, test_dataloader):
             loss = loss_function(pred, Y)
             total_loss += loss.item() * batch_size
 
+            pred_moves = dataset.decode_output(pred, fens)
+            # Count correct predictions
+            for pred_move, best_move in zip(pred_moves, best_moves):
+                if pred_move == best_move:
+                    total_correct += 1
+
             # Get predictions
             from_pred = pred[:, 0, :, :].view(batch_size, -1).argmax(dim=1)
             to_pred = pred[:, 1, :, :].view(batch_size, -1).argmax(dim=1)
@@ -110,6 +119,11 @@ def eval_model(model, test_dataloader):
             # Get targets
             from_target = Y[:, 0, :, :].view(batch_size, -1).argmax(dim=1)
             to_target = Y[:, 1, :, :].view(batch_size, -1).argmax(dim=1)
+
+            # Update correct counts
+            total_from_correct += (from_pred == from_target).sum().item()
+            total_to_correct += (to_pred == to_target).sum().item()
+            total_samples += batch_size
 
             # Update correct counts
             total_from_correct += (from_pred == from_target).sum().item()
@@ -142,7 +156,7 @@ for epoch in tqdm(range(NUM_EPOCHS)):
     # Set model to training mode
     model.train()
 
-    for batch_idx, (X, Y) in enumerate(train_dataloader):
+    for batch_idx, (X, Y, fens, best_moves) in enumerate(train_dataloader):
         # Move data to device
         X = X.to(model.device)
         Y = Y.to(model.device)
