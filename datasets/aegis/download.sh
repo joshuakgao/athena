@@ -1,3 +1,8 @@
+cd /opt/miniconda3/bin
+source activate
+conda activate athena
+
+# CCRL Games
 wget https://computerchess.org.uk/ccrl/4040/CCRL-4040.[2078348].pgn.7z -P datasets/aegis/raw_data/
 7z x datasets/aegis/raw_data/CCRL-4040.\[2078348\].pgn.7z -odatasets/aegis/raw_data/
 rm datasets/aegis/raw_data/CCRL-4040.\[2078348\].pgn.7z
@@ -18,6 +23,7 @@ wget https://computerchess.org.uk/ccrl/402.archive/CCRL.40-2.Archive.[2165313].p
 rm datasets/aegis/raw_data/CCRL.40-2.Archive.\[2165313\].pgn.7z
 mv datasets/aegis/raw_data/CCRL.40-2.Archive.\[2165313\].pgn datasets/aegis/raw_data/ccrl40-2archive.pgn
 
+# Leela Selfplay Games
 curl -L -o datasets/aegis/raw_data/leela-chess-zero-self-play-chess-games-dataset-1.zip\
   https://www.kaggle.com/api/v1/datasets/download/anthonytherrien/leela-chess-zero-self-play-chess-games-dataset-1
 
@@ -63,10 +69,17 @@ curl -L -o datasets/aegis/raw_data/leela-chess-zero-self-play-chess-games-datase
 curl -L -o datasets/aegis/raw_data/leela-chess-zero-self-play-chess-games-dataset-15.zip\
   https://www.kaggle.com/api/v1/datasets/download/anthonytherrien/leela-chess-zero-self-play-chess-games-dataset-15
 
-# Unzip all downloaded player game zip files
 download_dir="datasets/aegis/raw_data"
 for file in "$download_dir"/*.zip; do
   echo "Unzipping $file..."
   unzip -o "$file" -d "$download_dir"
-  rm "$file"  # Remove the zip file after extraction
+  rm "$file"
 done
+
+# Stockfish Selfplay Games
+gdown 1qrNvGVW50aTqkkH8l2GZOzV8fVmT2AzI -O datasets/aegis/raw_data/stockfish_games_1.pgn.gz
+gdown 1waF1Da9KyNAsj1tb55FDEi0LffPJK4Qa -O datasets/aegis/raw_data/stockfish_games_2.pgn.gz
+gdown 17j1U2mJ8dBf6O8FE5yhEhUmpUJtfIjwn -O datasets/aegis/raw_data/stockfish_games_3.pgn.gz
+gunzip datasets/aegis/raw_data/stockfish_games_1.pgn.gz
+gunzip datasets/aegis/raw_data/stockfish_games_2.pgn.gz
+gunzip datasets/aegis/raw_data/stockfish_games_3.pgn.gz

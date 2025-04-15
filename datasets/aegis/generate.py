@@ -27,7 +27,7 @@ temp_dir_path = Path("datasets/aegis/temp_parquet")
 output_dir_path = Path(dir)
 test_output_path = output_dir_path / "test.parquet"  # Path for test set
 rows_per_temp_parquet_write = 1_000_000
-positions_per_shard = 10_000_000
+positions_per_shard = 1_000_000
 min_elo_threshold = 2500
 test_sample_size = 10_000  # Number of samples for test set
 
@@ -148,12 +148,16 @@ def generate():
                         try:
                             if white_bot == "Lc0":
                                 white_elo = "3404"
+                            elif white_bot == "Stockfish 101217 64 BMI2":
+                                white_elo = "3529"
                             else:
                                 white_elo = game.headers.get("WhiteElo", "0")
                                 white_elo = int(white_elo) if white_elo.strip() else 0
 
                             if black_bot == "Lc0":
                                 black_elo = "3404"
+                            elif black_bot == "Stockfish 101217 64 BMI2":
+                                black_elo = "3529"
                             else:
                                 black_elo = game.headers.get("BlackElo", "0")
                                 black_elo = int(black_elo) if black_elo.strip() else 0
