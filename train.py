@@ -4,10 +4,10 @@ import sys
 
 import torch
 import torch.nn.functional as F
-import wandb
-from torch.utils.data import DataLoader, random_split
+from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+import wandb
 from architecture import Athena
 from datasets.aegis.dataset import AegisDataset
 
@@ -28,27 +28,22 @@ with open("train_config.json", "r") as f:
 
 
 # Create the dataset and split it into training and testing sets
-dataset = AegisDataset()
-dataset_size = len(dataset)
-test_size = int(TEST_SPLIT_RATIO * dataset_size)
-train_size = dataset_size - test_size
-iters_in_an_epoch = max(len(dataset) // BATCH_SIZE, 1)
-EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 100_000, 1)
-CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 1_000_000, 1)
+aegis = AegisDataset()
+iters_in_an_epoch = max(len(aegis.train_dataset) // BATCH_SIZE, 1)
+EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 10, 1)
+CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 100, 1)
+logger.info(
+    f"Check Metrics Interval: {CHECK_METRICS_INTERVAL}. Eval Model Interval: {EVAL_MODEL_INTERVAL}"
+)
 LR_DECAY_STEPS = iters_in_an_epoch
 
-
 logger.info(
-    f"Dataset size: {dataset_size}, Train size: {train_size}, Test size: {test_size}"
+    f"Train size: {len(aegis.train_dataset)}, Test size: {len(aegis.test_dataset)}"
 )
-
-train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
 
 # Create DataLoaders for training and testing
-train_dataloader = DataLoader(
-    train_dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True
-)
-test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+train_dataloader = DataLoader(aegis.train_dataset, batch_size=BATCH_SIZE)
+test_dataloader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 
 # Create the model, loss function, and optimizer
 model = Athena(input_channels=62, num_res_blocks=NUM_RES_BLOCKS)
@@ -106,7 +101,7 @@ def eval_model(model, test_dataloader):
             loss = loss_function(pred, Y)
             total_loss += loss.item() * batch_size
 
-            pred_moves = dataset.decode_output(pred, fens)
+            pred_moves = aegis.decode_output(pred, fens)
             # Count correct predictions
             for pred_move, best_move in zip(pred_moves, best_moves):
                 if pred_move == best_move:
@@ -145,6 +140,8 @@ def eval_model(model, test_dataloader):
 
 # Training loop
 logger.info("Training started")
+# Set model to training mode
+model.train()
 best_accuracy = -1
 for epoch in tqdm(range(NUM_EPOCHS)):
     # Learning rate decay
@@ -152,9 +149,6 @@ for epoch in tqdm(range(NUM_EPOCHS)):
         for param_group in optimizer.param_groups:
             param_group["lr"] *= LR_DECAY_RATE
         logger.info(f"Reduced learning rate to {optimizer.param_groups[0]['lr']}")
-
-    # Set model to training mode
-    model.train()
 
     for batch_idx, (X, Y, fens, best_moves) in enumerate(train_dataloader):
         # Move data to device
@@ -215,6 +209,9 @@ for epoch in tqdm(range(NUM_EPOCHS)):
     # Log epoch-level metrics
     if USE_WANDB:
         wandb.log({"epoch": epoch + 1})
+
+    # Resample aegis training set
+    aegis.train_dataset.sample_dataset()
 
 if USE_WANDB:
     wandb.finish()

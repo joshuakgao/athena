@@ -1,9 +1,8 @@
-import bisect
 import json
 import os
+import random
 import re
 import sys
-from collections import OrderedDict
 from pathlib import Path
 
 import chess
@@ -15,117 +14,12 @@ from tqdm import tqdm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from utils.chess_utils import column_letter_to_num, is_uci_valid
-from utils.logger import logger
 
 
-class AegisDataset(Dataset):
-    def __init__(self, dir="datasets/aegis/data", max_cache_size=5):
-        """
-        Args:
-            dir: Directory containing the dataset
-            max_cache_size: Maximum number of parquet files to keep in memory at once
-        """
-        self.dir = Path(dir)
-        self.files = sorted(self.dir.glob("*.parquet"))
-        self.metadata_path = self.dir / "metadata.json"
-
-        # LRU cache for loaded files
-        self.max_cache_size = max(max_cache_size, 1)  # ensure at least 1
-        self.file_cache = OrderedDict()  # Maintains access order
-
-        # Load metadata
-        with open(self.metadata_path, "r") as f:
-            self.metadata = json.load(f)
-
-        # Store file information instead of full index map
-        self.file_info = []
-        known_rows_per_file = 10_000_000
-        last_file_index = len(self.files) - 1
-
-        # Pre-calculate file offsets and row counts
-        for file_idx in tqdm(range(len(self.files))):
-            if file_idx < last_file_index:
-                num_rows = known_rows_per_file
-            else:
-                # Only load last file when needed
-                last_file_path = self.files[last_file_index]
-                parquet_file = pd.read_parquet(last_file_path, engine="pyarrow")
-                num_rows = len(parquet_file)
-            self.file_info.append((file_idx, num_rows))
-
-        # Calculate cumulative offsets
-        self.cumulative_offsets = [0]
-        for _, num_rows in self.file_info:
-            self.cumulative_offsets.append(self.cumulative_offsets[-1] + num_rows)
-
-    def _load_file(self, file_idx):
-        """Lazy load a file with LRU caching.
-
-        Args:
-            file_idx: Index of the file to load
-
-        Returns:
-            None (loads file into cache)
-        """
-        # Check if file is already in cache
-        if file_idx in self.file_cache:
-            # Move to end to mark as recently used
-            self.file_cache.move_to_end(file_idx)
-            return
-
-        # Load the file from disk
-        file_path = self.files[file_idx]
-
-        # Read parquet file efficiently using pyarrow
-        try:
-            df = pd.read_parquet(file_path, engine="pyarrow")
-            records = df.to_dict("records")
-
-            # Free memory immediately after conversion
-            del df
-
-            # Add to cache with LRU management
-            self.file_cache[file_idx] = records
-            self.file_cache.move_to_end(file_idx)
-
-            # Enforce cache size limit
-            if len(self.file_cache) > self.max_cache_size:
-                # Remove least recently used file
-                oldest_key = next(iter(self.file_cache))
-                del self.file_cache[oldest_key]
-
-        except Exception as e:
-            logger.error(f"Error loading file {file_path}: {str(e)}")
-            raise
-
-    def _get_file_and_row(self, idx):
-        """Calculate which file and row corresponds to the given index"""
-        if idx >= len(self):
-            raise IndexError("Index out of bounds")
-
-        # Binary search to find the right file
-        file_idx = bisect.bisect_right(self.cumulative_offsets, idx) - 1
-        row_idx = idx - self.cumulative_offsets[file_idx]
-        return file_idx, row_idx
-
-    def __len__(self):
-        return self.metadata["total_positions"]
-
-    def __getitem__(self, idx):
-        file_idx, row_idx = self._get_file_and_row(idx)
-        self._load_file(file_idx)
-
-        row = self.file_cache[file_idx][row_idx]
-        fen = row["fen"]
-        history = row["history"]
-        best_move = row["best_move"]
-        x = self.encode_input([fen], [history])
-        y = self.encode_output([best_move])
-        return x[0], y[0], fen, best_move
-
-    def clear_cache(self):
-        """Clear the file cache manually if needed"""
-        self.file_cache.clear()
+class AegisDataset:
+    def __init__(self, dir="datasets/aegis/data"):
+        self.train_dataset = AegisTrainDataset(dir)
+        self.test_dataset = AegisTestDataset(dir)
 
     def encode_input(self, fens, histories):
         """
@@ -302,3 +196,102 @@ class AegisDataset(Dataset):
             best_move = legal_moves[np.argmax(move_scores)]
             best_moves.append(best_move)
         return best_moves
+
+
+class AegisTrainDataset(Dataset):
+    def __init__(self, dir="datasets/aegis/data"):
+        """
+        Args:
+            dir: Directory containing the dataset
+        """
+        self.dir = Path(dir)
+        # Get all shards except test.parquet
+        self.shard_paths = [
+            p for p in self.dir.glob("*.parquet") if p.name != "test.parquet"
+        ]
+        self.metadata_path = self.dir / "metadata.json"
+        self.data = pd.DataFrame(columns=["fen", "history", "best_move"])
+
+        # Load metadata
+        with open(self.metadata_path, "r") as f:
+            self.metadata = json.load(f)
+
+        self.sample_dataset()
+
+    def sample_dataset(self, approx_n=10_000_000):
+        # Clear existing data
+        self.data = pd.DataFrame(columns=["fen", "history", "best_move"])
+        train_set_size = self.metadata["train_set_size"]
+
+        # Don't divide by 0
+        assert train_set_size > 0
+
+        # Get percentage of dataset we want, based on approx_n
+        sampling_rate = approx_n / train_set_size
+
+        rows = []
+        for shard_path in tqdm(self.shard_paths, desc=f"Sampling ~{approx_n} of Aegis"):
+            df = pd.read_parquet(shard_path)
+            for _, row in df.iterrows():
+                if random.random() < sampling_rate:
+                    rows.append(
+                        {
+                            "fen": row["fen"],
+                            "history": row["history"],
+                            "best_move": row["best_move"],
+                        }
+                    )
+        self.data = pd.DataFrame(rows)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        row = self.data.iloc[idx]
+        fen = row["fen"]
+        history = list(row["history"])
+        best_move = row["best_move"]
+        x = self.encode_input([fen], [history])
+        y = self.encode_output([best_move])
+        return x[0], y[0], fen, best_move
+
+
+class AegisTestDataset(Dataset):
+    def __init__(self, dir="datasets/aegis/data"):
+        """
+        Args:
+            dir: Directory containing the dataset
+        """
+        self.dir = Path(dir)
+        self.test_path = self.dir / "test.parquet"
+        self.metadata_path = self.dir / "metadata.json"
+        self.data = pd.DataFrame(columns=["fen", "history", "best_move"])
+
+        # Load metadata
+        with open(self.metadata_path, "r") as f:
+            self.metadata = json.load(f)
+
+        # Load test set
+        df = pd.read_parquet(self.test_path)
+        rows = []
+        for _, row in tqdm(df.iterrows(), desc="Loading Aegis test set"):
+            rows.append(
+                {
+                    "fen": row["fen"],
+                    "history": row["history"],
+                    "best_move": row["best_move"],
+                }
+            )
+        self.data = pd.DataFrame(rows)
+
+    def __len__(self):
+        return len(self.data)
+
+    def __getitem__(self, idx):
+        row = self.data.iloc[idx]
+        fen = row["fen"]
+        history = list(row["history"])
+        best_move = row["best_move"]
+        x = self.encode_input([fen], [history])
+        y = self.encode_output([best_move])
+        return x[0], y[0], fen, best_move
