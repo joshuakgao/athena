@@ -1,6 +1,7 @@
 import json
 import os
 import random
+import re
 import subprocess
 import sys
 import time
@@ -27,7 +28,8 @@ output_dir_path = Path(dir)
 test_output_path = output_dir_path / "test.parquet"  # Path for test set
 rows_per_temp_parquet_write = 1_000_000
 positions_per_shard = 1_000_000
-min_elo_threshold = 2500
+min_elo_threshold = 3000
+min_depth_threshold = 5
 samples_per_shard_for_test = 10  # Number of samples per shard for test set
 
 # Calculate 90% of available memory
@@ -46,17 +48,17 @@ ARROW_SCHEMA = pa.schema(
         ("fen", pa.string()),
         ("best_move", pa.string()),
         ("elo", pa.int32()),
-        # History is now a list of the last 7 FEN strings
         ("history", pa.list_(pa.string())),
         ("bot", pa.string()),
+        ("depth", pa.int32()),
+        ("eval", pa.float32()),
     ]
 )
 
 
 class RunningStats:
-    """Class to calculate running statistics without storing all values"""
+    """Class to calculate running statistics without storing all values."""
 
-    # (Implementation remains the same as before)
     def __init__(self):
         self.count = 0
         self.min = float("inf")
@@ -84,31 +86,26 @@ class RunningStats:
 
 def write_batch_to_parquet(batch, file_path, schema):
     """Helper function to write a batch of records to a Parquet file."""
-    # (Implementation remains the same as before)
     if not batch:
         logger.warning(f"Attempted to write an empty batch to {file_path}. Skipping.")
         return 0
     try:
-        # Ensure history is list, not numpy array (can happen from pandas conversion)
+        # Ensure history is list, not numpy array
         for record in batch:
             if "history" in record and isinstance(record["history"], np.ndarray):
                 record["history"] = record["history"].tolist()
 
-        table = pa.Table.from_pylist(
-            batch, schema=schema
-        )  # Use from_pylist for direct dict list
+        table = pa.Table.from_pylist(batch, schema=schema)
         pq.write_table(table, file_path)
         written_count = len(batch)
-        # batch.clear() # Don't clear here, caller manages the batch
         return written_count
     except pa.ArrowInvalid as e:
         logger.error(f"ArrowInvalid error writing batch to {file_path}: {e}")
-        # Log details about the problematic batch for debugging
+        # Debug info
         logger.error(f"Schema: {schema}")
         if batch:
             logger.error(f"First item type: {type(batch[0])}")
             logger.error(f"First item keys: {batch[0].keys()}")
-            # Check types of values in the first item
             for k, v in batch[0].items():
                 logger.error(f"  Key '{k}', Type: {type(v)}")
                 if isinstance(v, list) and v:
@@ -122,7 +119,6 @@ def write_batch_to_parquet(batch, file_path, schema):
 
 def sample_and_split_batch(batch, num_samples):
     """Samples items from batch for test set, returns train batch and test samples."""
-    # (Implementation remains the same as before)
     if not batch:
         return [], []
 
@@ -133,9 +129,7 @@ def sample_and_split_batch(batch, num_samples):
     sample_indices = random.sample(range(len(batch)), actual_samples)
     test_samples = [batch[i] for i in sample_indices]
 
-    # Create the training batch by excluding sampled indices
     train_batch = [item for i, item in enumerate(batch) if i not in sample_indices]
-
     return train_batch, test_samples
 
 
@@ -148,16 +142,167 @@ def normalize_fen(fen_string):
         parts[5] = "1"  # Reset fullmove number (or set to 1)
         return " ".join(parts)
     else:
-        # Return original or raise error if FEN is invalid
         logger.warning(
             f"Encountered potentially invalid FEN for normalization: {fen_string}"
         )
-        return fen_string  # Or handle error differently
+        return fen_string
+
+
+def extract_eval_and_depth(comment):
+    """
+    Extracts centipawn evaluation and depth from a PGN comment.
+    Example comment: {+0.28/4 0.17s}
+    Returns: (eval_cp, depth)
+    """
+    match = re.search(r"([+-]?\d+(\.\d+)?)/(\d+)", comment)
+    if match:
+        eval_str = match.group(1)
+        depth = int(match.group(3))
+        eval_cp = int(float(eval_str) * 100)
+        return eval_cp, depth
+    return None, None
+
+
+def parse_jsonl_into_parquet(jsonl_path, temp_dir_path, schema, rows_per_write=500_000):
+    """
+    Reads each line of a JSONL file, e.g.:
+      {
+        "fen": "6k1/4Rppp/8/8/8/8/5PPP/6K1 w - -",
+        "evals": [
+          {
+            "pvs": [
+              {"mate":1, "line":"e7e8"},
+              {"cp":100, "line":"e7e5 e5e6 ..."}
+            ],
+            "depth": 99
+          },
+          ...
+        ]
+      }
+
+    For each eval_item in "evals":
+      1. Identify the *first* PV's line as the "best move" source.
+      2. For *each* PV in that eval_item:
+         - parse the moves in 'line',
+         - push up to 7 moves to get 7 subsequent FENs,
+         - store that list in "history",
+         - store "best_move" from (1) so all PVs share the same best_move for that eval_item,
+         - set "eval" to a big number if 'mate' in the PV, else 'cp', else 0,
+         - store "depth" from eval_item["depth"].
+
+    Writes rows into "temp_jsonl_*.parquet" using your ARROW_SCHEMA.
+    """
+    temp_dir_path.mkdir(parents=True, exist_ok=True)
+    batch = []
+    file_index = 0
+
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        for line_num, line in enumerate(f, start=1):
+            line = line.strip()
+            if not line:
+                continue  # skip empty lines
+
+            # Parse JSON
+            try:
+                data = json.loads(line)
+            except json.JSONDecodeError as e:
+                print(f"Skipping invalid JSON at line {line_num}: {e}")
+                continue
+
+            # Grab FEN + evals
+            fen = data.get("fen", "")
+            fen = fen.split()
+            fen.append("0")
+            fen.append("1")
+            root_fen = " ".join(fen)
+            evals_list = data.get("evals", [])
+            if not fen or not evals_list:
+                logger.info("Fen or evals list not found")
+                continue
+
+            for eval_item in evals_list:
+                pvs = eval_item.get("pvs", [])
+                depth_val = eval_item.get("depth", 0)
+                if not pvs:
+                    logger.info("Pvs not found")
+                    continue  # no PVs -> skip
+
+                for pv in pvs:
+                    best_line_str = pv.get("line", "")
+
+                    if best_line_str:
+                        # The very first token in the line is the best move
+                        moves = best_line_str.split()
+                        fen_history = deque(maxlen=7)
+                        board = chess.Board(root_fen, chess960=True)
+                        cp = pv.get("cp", "")
+                        if not cp:
+                            if board.turn == chess.WHITE:
+                                cp = 9999
+                            else:
+                                cp = -9999
+                        for i, move in enumerate(moves):
+                            fen = board.fen()
+                            fen = normalize_fen(fen)
+                            best_move = move
+                            entry = {
+                                "fen": fen,
+                                "best_move": best_move,
+                                "elo": 3529,  # for stockfish
+                                "history": list(fen_history),
+                                "bot": "Stockfish",  # placeholder or set to something relevant
+                                "depth": depth_val,
+                                "eval": float(cp),
+                            }
+                            batch.append(entry)
+
+                            fen_history.appendleft(fen)
+                            try:
+                                board.push_uci(best_move)
+                            except ValueError:
+                                logger.warning(
+                                    f"Invalid move '{best_move}' encountered. Breaking out."
+                                )
+                                break
+
+                            # Write out periodically
+                            if len(batch) >= rows_per_write:
+                                temp_file_path = (
+                                    temp_dir_path / f"temp_jsonl_{file_index}.parquet"
+                                )
+                                written = write_batch_to_parquet(
+                                    batch, temp_file_path, schema
+                                )
+                                print(f"Wrote {written} rows to {temp_file_path.name}")
+                                batch.clear()
+                                file_index += 1
+
+    # Final flush
+    if batch:
+        temp_file_path = temp_dir_path / f"temp_jsonl_{file_index}.parquet"
+        written = write_batch_to_parquet(batch, temp_file_path, schema)
+        print(f"Wrote final {written} rows to {temp_file_path.name}")
+        batch.clear()
 
 
 def generate():
     output_dir_path.mkdir(parents=True, exist_ok=True)
     temp_dir_path.mkdir(parents=True, exist_ok=True)
+
+    # --- Additional stats: wins/draws, depth tracking ---
+    white_win_count = 0
+    black_win_count = 0
+    draw_count = 0
+
+    # Running stats for ELO (existing)
+    white_stats = RunningStats()
+    black_stats = RunningStats()
+    overall_stats = RunningStats()
+
+    # Running stats for depth
+    white_depth_stats = RunningStats()
+    black_depth_stats = RunningStats()
+    overall_depth_stats = RunningStats()
 
     # --- FIRST PASS: Write all FENs to temp Parquet files ---
     temp_files = sorted(list(temp_dir_path.glob("temp_*.parquet")))
@@ -165,7 +310,6 @@ def generate():
     total_games = 0
     input_positions_estimate = 0
 
-    # Only process PGN files if no temp files exist
     if not temp_files:
         logger.info(
             "No temporary Parquet files found. Starting First Pass: Processing PGNs..."
@@ -175,261 +319,188 @@ def generate():
         total_written_to_temp = 0
 
         pgn_files = sorted(list(Path(raw_dir).glob("*.pgn")))
-        if not pgn_files:
-            logger.warning(f"No PGN files found in {raw_dir}. Exiting.")
-            return
+        if pgn_files:
+            for pgn_path in tqdm(pgn_files, desc="Processing PGN files"):
+                logger.info(f"Processing {pgn_path.name}...")
+                games_in_file = 0
+                positions_in_file_batch = 0
 
-        for pgn_path in tqdm(pgn_files, desc="Processing PGN files"):
-            logger.info(f"Processing {pgn_path.name}...")
-            games_in_file = 0
-            positions_in_file_batch = 0
-
-            try:
                 with open(pgn_path, errors="replace", encoding="utf-8") as pgn_file:
-                    game_offset = pgn_file.tell()
                     while True:
-                        # (Error handling for reading games remains the same)
-                        try:
-                            start_offset = pgn_file.tell()
-                            game = chess.pgn.read_game(pgn_file)
-                            if game is None and pgn_file.tell() == start_offset:
-                                line = pgn_file.readline()
-                                if not line:
-                                    break
-                                logger.warning(
-                                    f"Empty read at offset {start_offset} in {pgn_path.name}, skipping line."
-                                )
-                                continue
-                        except (ValueError, RuntimeError) as e:
-                            logger.warning(
-                                f"Error reading game headers/structure near offset {game_offset} in {pgn_path.name}: {e}. Attempting recovery."
-                            )
-                            # ... (recovery logic remains the same) ...
-                            pgn_file.seek(game_offset)
-                            try:
-                                while True:
-                                    line = pgn_file.readline()
-                                    if not line:
-                                        game = None
-                                        break
-                                    if line.startswith("[Event "):
-                                        pgn_file.seek(game_offset)
-                                        game = chess.pgn.read_game(pgn_file)
-                                        break
-                                    game_offset = pgn_file.tell()
-                            except Exception as seek_e:
-                                logger.error(
-                                    f"Recovery attempt failed in {pgn_path.name}: {seek_e}. Skipping rest of file."
-                                )
-                                game = None
-                        except Exception as e:
-                            logger.error(
-                                f"Unexpected error reading game near offset {game_offset} in {pgn_path.name}: {e}. Skipping game.",
-                                exc_info=False,
-                            )
-                            # ... (recovery logic remains the same) ...
-                            continue
-
+                        game = chess.pgn.read_game(pgn_file)
                         if game is None:
                             break
 
-                        game_offset = pgn_file.tell()
                         total_games += 1
                         games_in_file += 1
 
-                        # (ELO Handling remains the same)
+                        # Parse basic info
                         white_bot = game.headers.get("White", "Unknown")
                         black_bot = game.headers.get("Black", "Unknown")
                         white_elo_str = game.headers.get("WhiteElo", "0")
                         black_elo_str = game.headers.get("BlackElo", "0")
-                        # ... (logic to parse or assign fixed ELOs) ...
+                        starting_fen = game.headers.get("FEN", "")
+
+                        # Assign ELO for known bots or parse
                         if white_bot == "Lc0":
                             white_elo = 3404
                         elif white_bot == "Stockfish 101217 64 BMI2":
                             white_elo = 3529
                         else:
-                            try:
-                                white_elo = (
-                                    int(white_elo_str) if white_elo_str.strip() else 0
-                                )
-                            except ValueError:
-                                logger.warning(
-                                    f"Invalid WhiteElo '{white_elo_str}'... Using 0."
-                                )
-                                white_elo = 0
+                            white_elo = (
+                                int(white_elo_str) if white_elo_str.strip() else 0
+                            )
 
                         if black_bot == "Lc0":
                             black_elo = 3404
                         elif black_bot == "Stockfish 101217 64 BMI2":
                             black_elo = 3529
                         else:
-                            try:
-                                black_elo = (
-                                    int(black_elo_str) if black_elo_str.strip() else 0
-                                )
-                            except ValueError:
-                                logger.warning(
-                                    f"Invalid BlackElo '{black_elo_str}'... Using 0."
-                                )
-                                black_elo = 0
+                            black_elo = (
+                                int(black_elo_str) if black_elo_str.strip() else 0
+                            )
 
+                        # If both sides below threshold, skip entire game
                         if (
                             white_elo < min_elo_threshold
                             and black_elo < min_elo_threshold
                         ):
                             continue
 
-                        board = game.board()
-                        # --- HISTORY CHANGE: Use deque to store last 7 FENs ---
+                        # Count result if the game is not skipped
+                        result = game.headers.get("Result", "")
+                        if result == "1-0":
+                            white_win_count += 1
+                        elif result == "0-1":
+                            black_win_count += 1
+                        elif result == "1/2-1/2":
+                            draw_count += 1
+
+                        if starting_fen:
+                            starting_fen = normalize_fen(starting_fen)
+                            board = chess.Board(starting_fen, chess960=True)
+                            if not board.is_valid():
+                                continue
+                        else:
+                            board = game.board()
                         last_seven_fens = deque(maxlen=7)
-                        # --- END HISTORY CHANGE ---
 
-                        move_index = 0
-                        try:
-                            for move in game.mainline_moves():
-                                move_index += 1
-                                # --- Get state BEFORE the move ---
-                                current_fen_unnormalized = board.fen()
-                                next_move_uci = move.uci()
+                        for node in game.mainline():
+                            move = node.move
+                            current_fen_unnormalized = board.fen()
+                            next_move_uci = move.uci()
+                            comment = node.comment
+                            eval_cp, depth = None, None
+                            if comment:
+                                eval_cp, depth = extract_eval_and_depth(comment)
 
-                                # --- Normalize the FEN of the state we are recording ---
-                                norm_fen = normalize_fen(current_fen_unnormalized)
+                            if eval_cp is None or depth is None:
+                                continue
+
+                            norm_fen = normalize_fen(current_fen_unnormalized)
+                            if (
+                                norm_fen == current_fen_unnormalized
+                                and len(current_fen_unnormalized.split()) != 6
+                            ):
+                                logger.warning(
+                                    f"Skipping invalid FEN: {current_fen_unnormalized} in game {total_games}"
+                                )
+                                continue
+
+                            try:
+                                board.push(move)
+                            except ValueError:
+                                break
+
+                            if not board.is_valid():
+                                logger.warning(
+                                    f"Board invalid before move {next_move_uci} in game {total_games}. "
+                                    f"FEN: {current_fen_unnormalized}. Skipping rest of game."
+                                )
+                                break
+
+                            fen_parts = current_fen_unnormalized.split()
+                            active_color = fen_parts[1] if len(fen_parts) > 1 else "w"
+                            elo = white_elo if active_color == "w" else black_elo
+                            bot = white_bot if active_color == "w" else black_bot
+
+                            if (
+                                elo >= min_elo_threshold
+                                and depth >= min_depth_threshold
+                            ):
+                                entry = {
+                                    "fen": norm_fen,
+                                    "best_move": next_move_uci,
+                                    "elo": elo,
+                                    "history": list(last_seven_fens),
+                                    "bot": bot,
+                                    "depth": depth,
+                                    "eval": eval_cp,
+                                }
+                                current_temp_batch.append(entry)
+                                positions_in_file_batch += 1
+                                input_positions_estimate += 1
+
                                 if (
-                                    norm_fen == current_fen_unnormalized
-                                    and len(current_fen_unnormalized.split()) != 6
+                                    len(current_temp_batch)
+                                    >= rows_per_temp_parquet_write
                                 ):
-                                    logger.warning(
-                                        f"Skipping position due to invalid pre-move FEN: {current_fen_unnormalized} in game {total_games}"
+                                    temp_file_path = (
+                                        temp_dir_path
+                                        / f"temp_{temp_file_index}.parquet"
                                     )
-                                    # Need to push move to advance board state even if we skip recording
-                                    try:
-                                        board.push(move)
-                                    except ValueError:
-                                        break  # Stop if move becomes illegal
-                                    continue  # Skip recording this position
-
-                                # Check board validity *before* pushing the move
-                                if not board.is_valid():
-                                    logger.warning(
-                                        f"Board invalid *before* move {next_move_uci} in game {total_games}. FEN: {current_fen_unnormalized}. Skipping rest of game."
+                                    written = write_batch_to_parquet(
+                                        current_temp_batch, temp_file_path, ARROW_SCHEMA
                                     )
-                                    break
-
-                                # --- Determine ELO/Bot based on whose turn it is in current_fen ---
-                                fen_parts = (
-                                    current_fen_unnormalized.split()
-                                )  # Use unnormalized to check turn reliably
-                                active_color = (
-                                    fen_parts[1] if len(fen_parts) > 1 else "w"
-                                )  # Default to white if FEN is weird
-                                elo = white_elo if active_color == "w" else black_elo
-                                bot = white_bot if active_color == "w" else black_bot
-
-                                # --- Record the position if ELO is sufficient ---
-                                if elo >= min_elo_threshold:
-                                    entry = {
-                                        "fen": norm_fen,  # The normalized FEN *before* the move
-                                        "best_move": next_move_uci,  # The move played from this state
-                                        "elo": elo,
-                                        # --- HISTORY CHANGE: Store the list of previous FENs ---
-                                        "history": list(last_seven_fens),
-                                        # --- END HISTORY CHANGE ---
-                                        "bot": bot,
-                                    }
-                                    current_temp_batch.append(entry)
-                                    positions_in_file_batch += 1
-                                    input_positions_estimate += 1
-
-                                    # (Batch writing logic remains the same)
-                                    if (
-                                        len(current_temp_batch)
-                                        >= rows_per_temp_parquet_write
-                                    ):
-                                        temp_file_path = (
-                                            temp_dir_path
-                                            / f"temp_{temp_file_index}.parquet"
+                                    if written > 0:
+                                        logger.info(
+                                            f"Written temp batch to {temp_file_path.name} ({written} records)"
                                         )
-                                        written = write_batch_to_parquet(
-                                            current_temp_batch,
-                                            temp_file_path,
-                                            ARROW_SCHEMA,
-                                        )
-                                        if written > 0:
-                                            logger.info(
-                                                f"Written temp batch to {temp_file_path.name} ({written} records)"
-                                            )
-                                            total_written_to_temp += written
-                                            temp_file_index += 1
-                                        current_temp_batch.clear()
+                                        temp_file_index += 1
+                                    total_written_to_temp += written
+                                    current_temp_batch.clear()
 
-                                # --- HISTORY CHANGE: Add the *processed* normalized FEN to history deque ---
-                                # Do this *after* potentially creating the entry for this FEN
-                                last_seven_fens.appendleft(norm_fen)
-                                # --- END HISTORY CHANGE ---
+                            last_seven_fens.appendleft(norm_fen)
 
-                                # --- Push the move to advance the board state for the NEXT iteration ---
-                                try:
-                                    board.push(move)
-                                except ValueError as e:
-                                    logger.warning(
-                                        f"Illegal move '{next_move_uci}' (move #{move_index}) encountered in game {total_games}. FEN: {norm_fen}. Error: {e}. Skipping rest of game."
-                                    )
-                                    break
-
-                        except (AttributeError, ValueError, IndexError) as e:
-                            logger.warning(
-                                f"Error processing moves in game {total_games} from {pgn_path.name} near move #{move_index}: {e}. Last valid FEN: {board.fen() if 'board' in locals() else 'N/A'}"
-                            )
-                        except Exception as e:
-                            logger.error(
-                                f"Unexpected error during move processing loop for game {total_games}: {e}",
-                                exc_info=True,
-                            )
-
-            # (Outer file processing error handling remains the same)
-            except FileNotFoundError:
-                logger.error(f"PGN file not found: {pgn_path}. Skipping.")
-                continue
-            except Exception as e:
-                logger.error(
-                    f"Failed to process PGN file {pgn_path.name}: {e}", exc_info=True
-                )
-                continue
-
-            logger.info(
-                f"Finished {pgn_path.name}. Games: {games_in_file}. Positions added: {positions_in_file_batch}."
-            )
-
-        # (Final temp batch writing remains the same)
-        if current_temp_batch:
-            temp_file_path = temp_dir_path / f"temp_{temp_file_index}.parquet"
-            written = write_batch_to_parquet(
-                current_temp_batch, temp_file_path, ARROW_SCHEMA
-            )
-            if written > 0:
                 logger.info(
-                    f"Written final temp batch to {temp_file_path.name} ({written} records)"
+                    f"Finished {pgn_path.name}. Games: {games_in_file}. Positions added: {positions_in_file_batch}."
                 )
+
+            if current_temp_batch:
+                temp_file_path = temp_dir_path / f"temp_{temp_file_index}.parquet"
+                written = write_batch_to_parquet(
+                    current_temp_batch, temp_file_path, ARROW_SCHEMA
+                )
+                if written > 0:
+                    logger.info(
+                        f"Written final temp batch to {temp_file_path.name} ({written} records)"
+                    )
                 total_written_to_temp += written
-            current_temp_batch.clear()
+                current_temp_batch.clear()
 
-        logger.info(f"TOTAL PGN GAMES PARSED: {total_games}")
-        logger.info(
-            f"Total records written to temp Parquet files: {total_written_to_temp:,}"
-        )
-        if total_written_to_temp != input_positions_estimate:
-            logger.warning(
-                f"Mismatch: estimated positions ({input_positions_estimate:,}), written ({total_written_to_temp:,})."
+            logger.info(f"TOTAL PGN GAMES PARSED: {total_games}")
+            logger.info(
+                f"Total records written to temp Parquet files: {total_written_to_temp:,}"
             )
+            if total_written_to_temp != input_positions_estimate:
+                logger.warning(
+                    f"Mismatch: estimated positions ({input_positions_estimate:,}), "
+                    f"written ({total_written_to_temp:,})."
+                )
 
-        temp_files = sorted(list(temp_dir_path.glob("temp_*.parquet")))
-        if not temp_files:
-            logger.warning("No temporary Parquet files were generated. Exiting.")
-            return
+        # parse lichess jsonl dataset
+        jsonl_files = list(Path(raw_dir).glob("*.jsonl"))
+        for jfile in jsonl_files:
+            logger.info(f"Parsing JSONL file: {jfile.name}")
+            parse_jsonl_into_parquet(
+                jsonl_path=jfile,
+                temp_dir_path=temp_dir_path,
+                schema=ARROW_SCHEMA,
+                rows_per_write=500_000,  # or whatever chunk size
+            )
     else:
-        # (Skipping PGN processing if temp files exist remains the same)
         logger.info(
-            f"Found {len(temp_files)} existing temp Parquet files, skipping PGN processing (First Pass)."
+            f"Found {len(temp_files)} existing temp Parquet files, skipping PGN processing."
         )
         logger.info("Estimating input position count from existing temp files...")
         input_count_sort_est = 0
@@ -437,23 +508,16 @@ def generate():
             try:
                 input_count_sort_est += pq.read_metadata(f).num_rows
             except Exception as e:
-                logger.warning(f"Could not read metadata for {f.name}: {e}.")
+                logger.warning(f"Could not read metadata for {f.name}: {e}")
         logger.info(f"Estimated input positions for sort: {input_count_sort_est:,}")
         input_positions_estimate = input_count_sort_est
 
     # --- SECOND PASS: External Sort + Reduce ---
-    # This part remains identical to the previous version where test sets are
-    # sampled per shard just before writing. The change to FEN history
-    # doesn't affect the logic here, only the *content* of the history string
-    # used for sorting and stored in the final Parquet files.
-    logger.info("Starting Second Pass: Deduplication and Filtering using External Sort")
+    temp_files = sorted(list(temp_dir_path.glob("temp_*.parquet")))
+    logger.info("Starting Second Pass: Deduplication and Filtering via External Sort")
     process = psutil.Process()
     initial_mem_mb = process.memory_info().rss / (1024 * 1024)
     logger.info(f"Memory before sort pipe: {initial_mem_mb:.2f} MB")
-
-    white_stats = RunningStats()
-    black_stats = RunningStats()
-    overall_stats = RunningStats()  # Stats based on final *training* data
 
     current_shard_batch = []
     shard_index = 0
@@ -467,9 +531,9 @@ def generate():
         "sort",
         "-t",
         "\t",
-        "-k1,1",
-        "-k3,3nr",
-        "-k2,2",  # Keep FEN, ELO desc, History
+        "-k1,1",  # Sort by FEN
+        "-k2,2",  # Then by history string
+        "-k3,3nr",  # Then by depth descending (numeric, reverse)
         "-S",
         sort_memory,
         f"--parallel={sort_parallelism}",
@@ -479,11 +543,10 @@ def generate():
         sort_command.extend(["-T", sort_temp_dir])
 
     logger.info(f"Using sort command: {' '.join(sort_command)}")
-    logger.info(
-        f"Sorting primarily by FEN, secondarily by ELO (desc), tertiarily by history (FEN list)."
-    )
 
     sort_proc = None
+    unique_lines_processed = 0
+
     try:
         sort_proc = subprocess.Popen(
             sort_command,
@@ -499,10 +562,8 @@ def generate():
         logger.info("Feeding data to external sort from temp Parquet files...")
         feeding_start_time = time.time()
 
-        # --- Feed data to sort ---
         try:
             for temp_file_path in tqdm(temp_files, desc="Feeding temp files"):
-                logger.debug(f"Processing temp file: {temp_file_path}")
                 try:
                     table = pq.read_table(temp_file_path)
                     df = table.to_pandas()
@@ -511,10 +572,18 @@ def generate():
                         try:
                             entry_dict = row.to_dict()
 
-                            # --- Data Validation and Formatting ---
+                            # Validate
                             if not all(
                                 k in entry_dict
-                                for k in ["fen", "best_move", "elo", "history", "bot"]
+                                for k in [
+                                    "fen",
+                                    "best_move",
+                                    "elo",
+                                    "history",
+                                    "bot",
+                                    "depth",
+                                    "eval",
+                                ]
                             ):
                                 logger.warning(
                                     f"Skipping row with missing keys in {temp_file_path}: {entry_dict}"
@@ -525,25 +594,20 @@ def generate():
                             if isinstance(history_value, np.ndarray):
                                 entry_dict["history"] = history_value.tolist()
                             elif not isinstance(history_value, list):
-                                entry_dict["history"] = (
-                                    []
-                                )  # Default to empty if not list
+                                entry_dict["history"] = []
 
-                            # Ensure all history elements are strings (should be FENs now)
                             entry_dict["history"] = [
                                 str(h) for h in entry_dict["history"]
                             ]
 
                             fen = str(entry_dict["fen"])
                             history_list = entry_dict["history"]
-                            # --- HISTORY CHANGE: Use a separator unlikely in FENs ---
-                            history_str = "||".join(
-                                history_list
-                            )  # Join FENs for sort key
-                            # --- END HISTORY CHANGE ---
+                            history_str = "||".join(history_list)
                             elo = int(entry_dict["elo"])
                             best_move = str(entry_dict["best_move"])
                             bot = str(entry_dict["bot"])
+                            depth = int(entry_dict["depth"])
+                            eval_ = float(entry_dict["eval"])
 
                             clean_entry = {
                                 "fen": fen,
@@ -551,32 +615,24 @@ def generate():
                                 "elo": elo,
                                 "history": history_list,
                                 "bot": bot,
+                                "depth": depth,
+                                "eval": eval_,
                             }
                             original_json_str = json.dumps(
                                 clean_entry, ensure_ascii=False, separators=(",", ":")
                             )
                             tsv_line = (
-                                f"{fen}\t{history_str}\t{elo}\t{original_json_str}\n"
+                                f"{fen}\t{history_str}\t{depth}\t{original_json_str}\n"
                             )
-
                             sort_proc.stdin.write(tsv_line)
                             input_count_sort_actual += 1
 
-                        # (Error handling for row processing remains the same)
-                        except (KeyError, TypeError, ValueError) as e:
-                            logger.warning(
-                                f"Skipping malformed row during prep for sort in {temp_file_path}: {row} - Error: {e}"
-                            )
-                            continue
                         except BrokenPipeError:
-                            # ... (Broken pipe handling) ...
                             logger.error(
-                                "Broken Pipe Error: Sort process terminated unexpectedly while feeding data."
+                                "Broken Pipe Error: Sort process terminated unexpectedly."
                             )
-                            # ... (stderr reading attempt) ...
                             raise
                         except Exception as e:
-                            # ... (Other exception handling) ...
                             logger.error(
                                 f"Unexpected error writing to sort stdin for row {row}: {e}",
                                 exc_info=True,
@@ -591,7 +647,6 @@ def generate():
                     continue
 
         finally:
-            # (Closing sort stdin remains the same)
             if sort_proc and sort_proc.stdin and not sort_proc.stdin.closed:
                 try:
                     sort_proc.stdin.close()
@@ -603,19 +658,21 @@ def generate():
         logger.info(
             f"Finished feeding {input_count_sort_actual:,} lines to sort in {feeding_duration:.2f} seconds."
         )
+
         mem_after_feed_mb = process.memory_info().rss / (1024 * 1024)
         logger.info(
             f"Memory after feeding, before reduction: {mem_after_feed_mb:.2f} MB"
         )
 
         # --- Process the sorted output ---
-        current_key = None  # Key is still (FEN, history_str)
+        current_key = None  # Dedup key: (fen, history_str)
         output_start_time = time.time()
         total_lines_est = (
             input_count_sort_actual
             if input_count_sort_actual > 0
             else input_positions_estimate
         )
+
         output_progress = tqdm(
             sort_proc.stdout,
             desc=f"Reducing sorted data (Shard {shard_index})",
@@ -623,7 +680,6 @@ def generate():
             total=total_lines_est,
             mininterval=2.0,
         )
-        unique_lines_processed = 0
 
         for sorted_line in output_progress:
             try:
@@ -633,26 +689,23 @@ def generate():
                         f"Skipping malformed sorted line (expected 4 fields): {sorted_line.strip()[:100]}..."
                     )
                     continue
-                fen, history_str, elo_str, original_json_str = parts
-                key = (fen, history_str)  # Deduplication key
+                fen, history_str, depth_str, original_json_str = parts
+                key = (fen, history_str)
 
             except Exception as e:
                 logger.warning(
-                    f"Skipping malformed sorted line (Error parsing fields): {sorted_line.strip()[:100]}... - Error: {e}"
+                    f"Skipping malformed sorted line (Error parsing fields): {sorted_line.strip()[:100]}... - {e}"
                 )
                 continue
 
-            # --- Deduplication Logic (remains the same) ---
             if key != current_key:
                 unique_lines_processed += 1
                 current_key = key
                 try:
                     best_entry_dict = json.loads(original_json_str)
-                    current_shard_batch.append(
-                        best_entry_dict
-                    )  # Add best entry to batch
+                    current_shard_batch.append(best_entry_dict)
 
-                    # --- Shard Writing and Test Set Sampling (remains the same) ---
+                    # If batch full, write shard
                     if len(current_shard_batch) >= positions_per_shard:
                         logger.info(
                             f"Shard {shard_index} full ({len(current_shard_batch)} records). Sampling for test set..."
@@ -678,15 +731,21 @@ def generate():
                                 f"Written training shard {shard_index} ({written} records)"
                             )
                             total_positions_train_final += written
-                            # --- Update Stats (remains the same) ---
+
+                            # Update ELO + Depth stats for the final training positions
                             for entry in train_batch_part:
                                 stat_elo = entry["elo"]
+                                stat_depth = entry["depth"]
                                 color = entry["fen"].split(" ")[1]
                                 if color == "w":
                                     white_stats.update(stat_elo)
+                                    white_depth_stats.update(stat_depth)
                                 else:
                                     black_stats.update(stat_elo)
+                                    black_depth_stats.update(stat_depth)
                                 overall_stats.update(stat_elo)
+                                overall_depth_stats.update(stat_depth)
+
                         else:
                             logger.warning(
                                 f"Shard {shard_index} is empty after sampling."
@@ -698,7 +757,6 @@ def generate():
                             f"Reducing sorted data (Shard {shard_index})"
                         )
 
-                # (Error handling for JSON parsing, KeyErrors, etc. remains the same)
                 except json.JSONDecodeError as e:
                     logger.warning(
                         f"Could not parse JSON for unique key {current_key}: {e} - JSON: {original_json_str[:100]}..."
@@ -714,15 +772,13 @@ def generate():
                     )
                     continue
 
-            # Implicitly ignore line if key == current_key (duplicate)
-
         output_progress.close()
         output_duration = time.time() - output_start_time
         logger.info(
-            f"Finished processing sorted output ({unique_lines_processed:,} unique positions found) in {output_duration:.2f} seconds."
+            f"Finished processing sorted output ({unique_lines_processed:,} unique positions) in {output_duration:.2f} seconds."
         )
 
-        # --- Process the final remaining batch (remains the same) ---
+        # --- Final partial shard ---
         if current_shard_batch:
             logger.info(
                 f"Processing final batch for shard {shard_index} ({len(current_shard_batch)} records). Sampling..."
@@ -746,20 +802,25 @@ def generate():
                     f"Written final training shard {shard_index} ({written} records)"
                 )
                 total_positions_train_final += written
-                # Update stats for final batch
+
+                # Update stats
                 for entry in final_train_batch:
                     stat_elo = entry["elo"]
+                    stat_depth = entry["depth"]
                     color = entry["fen"].split(" ")[1]
                     if color == "w":
                         white_stats.update(stat_elo)
+                        white_depth_stats.update(stat_depth)
                     else:
                         black_stats.update(stat_elo)
+                        black_depth_stats.update(stat_depth)
                     overall_stats.update(stat_elo)
+                    overall_depth_stats.update(stat_depth)
             else:
                 logger.warning(f"Final shard {shard_index} is empty after sampling.")
             current_shard_batch.clear()
 
-        # --- Write the accumulated test set (remains the same) ---
+        # Write test set
         if test_set_accumulated:
             logger.info(
                 f"Writing accumulated test set ({len(test_set_accumulated)} records)..."
@@ -777,10 +838,9 @@ def generate():
         else:
             logger.warning("No samples were collected for the test set.")
 
-        # --- Check Sort Process Exit Status (remains the same) ---
+        # Check sort process status
         logger.info("Waiting for sort process to exit...")
         sort_proc.wait()
-        # ... (stderr reading and return code checking) ...
         stderr_data = ""
         if sort_proc.stderr and not sort_proc.stderr.closed:
             try:
@@ -789,12 +849,10 @@ def generate():
                 try:
                     sort_proc.stderr.close()
                 except Exception:
-                    pass  # Ignore errors closing already potentially closed pipe
+                    pass
 
         if sort_proc.returncode != 0:
-            logger.error(
-                f"External sort process failed with return code {sort_proc.returncode}"
-            )
+            logger.error(f"Sort process failed with return code {sort_proc.returncode}")
             if stderr_data:
                 logger.error(f"Sort process stderr:\n----\n{stderr_data}\n----")
             else:
@@ -803,8 +861,6 @@ def generate():
                 )
             if sort_proc.stdout and not sort_proc.stdout.closed:
                 sort_proc.stdout.close()
-            if sort_proc.stdin and not sort_proc.stdin.closed:
-                sort_proc.stdin.close()
             raise RuntimeError(
                 f"External sort process failed (code {sort_proc.returncode})."
             )
@@ -812,19 +868,16 @@ def generate():
             logger.info("External sort process completed successfully.")
             if stderr_data:
                 logger.warning(
-                    f"Sort process stderr reported (exit code 0):\n----\n{stderr_data}\n----"
+                    f"Sort process stderr (exit code 0):\n----\n{stderr_data}\n----"
                 )
 
-    # (Overall exception handling for second pass remains the same)
     except Exception as e:
         error_message = (
             f"An error occurred during the second pass: {e}\n{traceback.format_exc()}"
         )
         logger.error(error_message)
-        # ... (Attempt to terminate sort process) ...
         if sort_proc and sort_proc.poll() is None:
             logger.warning("Attempting to terminate sort process due to error...")
-            # ... (stderr reading and terminate/kill logic) ...
             try:
                 sort_proc.terminate()
                 try:
@@ -840,18 +893,17 @@ def generate():
             except Exception as term_err:
                 logger.error(f"Error terminating/killing sort process: {term_err}")
 
-    # --- Final Steps ---
-    # (Logging final counts and memory usage remains the same)
     final_mem_mb = process.memory_info().rss / (1024 * 1024)
     logger.info("Second Pass complete.")
     logger.info(f"Unique positions found: {unique_lines_processed:,}")
     logger.info(f"Training positions written: {total_positions_train_final:,}")
     logger.info(f"Test positions written: {total_positions_test_final:,}")
     logger.info(
-        f"Final Python Proc memory: {final_mem_mb:.2f} MB (Delta: {final_mem_mb - initial_mem_mb:.2f} MB)"
+        f"Final Python Proc memory: {final_mem_mb:.2f} MB "
+        f"(Delta: {final_mem_mb - initial_mem_mb:.2f} MB)"
     )
 
-    # --- Prepare Metadata (remains the same structure) ---
+    # --- Prepare Metadata ---
     metadata = {
         "pgn_games_parsed": total_games if total_games > 0 else "Skipped or N/A",
         "input_positions_fed_to_sort": input_count_sort_actual,
@@ -861,9 +913,18 @@ def generate():
         "samples_per_shard_for_test": samples_per_shard_for_test,
         "min_elo_threshold": min_elo_threshold,
         "positions_per_shard_target": positions_per_shard,
+        # New: game-level outcomes
+        "white_wins_count": white_win_count,
+        "black_wins_count": black_win_count,
+        "draws_count": draw_count,
+        # ELO Stats
         "white_elo_stats_train": white_stats.to_dict(),
         "black_elo_stats_train": black_stats.to_dict(),
         "overall_elo_stats_train": overall_stats.to_dict(),
+        # Depth Stats
+        "white_depth_stats_train": white_depth_stats.to_dict(),
+        "black_depth_stats_train": black_depth_stats.to_dict(),
+        "overall_depth_stats_train": overall_depth_stats.to_dict(),
     }
     metadata_path = output_dir_path / "metadata.json"
     try:

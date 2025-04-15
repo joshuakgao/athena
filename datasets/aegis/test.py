@@ -17,11 +17,15 @@ def validate(tests):
 
     for parquet_file in tqdm(aegis, desc="Validating files"):
         df = pq.read_table(parquet_file).to_pandas()
+
+        # # Print for debugging
+        # df_head = df.head()
+        # for _, row in df_head.iterrows():
+        #     print(row.to_dict())
+
         for name, fen, history in tests:
             matches = df[(df["fen"] == fen)]
             for _, row in matches.iterrows():
-                # print(row["fen"])
-                # print(row["history"])
                 if list(row["history"]) == history:
                     test_results[name] += 1
 
@@ -30,7 +34,7 @@ def validate(tests):
         if count == 1:
             logger.info(f"{name}: passed ✅")
         elif count == 0:
-            logger.info(f"{name}: None positions found ❌")
+            logger.info(f"{name}: None positions found ❓")
         else:
             logger.info(f"{name}: Duplicate positions found ❌")
 
@@ -100,6 +104,19 @@ if __name__ == "__main__":
                 "rnbqkbnr/pppp1ppp/8/4p3/4P3/8/PPPP1PPP/RNBQKBNR w KQkq - 0 1",
                 "rnbqkbnr/pppppppp/8/8/4P3/8/PPPP1PPP/RNBQKBNR b KQkq - 0 1",
                 "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1",
+            ],
+        ),
+        (
+            "Mid Game",
+            "1B6/Q3n2k/5p2/b2p3p/2pP2b1/p1P5/P3qPPK/5N2 b - - 0 1",
+            [
+                "1r6/Q3n2k/3B1p2/b2p3p/2pP2b1/p1P5/P3qPPK/5N2 w - - 0 1",
+                "1R6/Q3n2k/3B1p2/b2p3p/2pP2b1/p1P5/Pr2qPPK/5N2 b - - 0 1",
+                "1R6/1Q2n2k/3B1p2/b2p3p/2pP2b1/p1P5/Pr2qPPK/5N2 w - - 0 1",
+                "1R6/1Q2n2k/3B1p2/b2p3p/2pP2b1/p1P5/P1r1qPPK/5N2 b - - 0 1",
+                "1R6/1Q2n2k/3B1p2/b2p3p/2pP2b1/p1P5/P1r1qPP1/5NK1 w - - 0 1",
+                "1R6/1Q5k/3B1pn1/b2p3p/2pP2b1/p1P5/P1r1qPP1/5NK1 b - - 0 1",
+                "1R6/7k/3B1pn1/b2p3p/2pP2b1/p1P5/P1r1qPP1/1Q3NK1 w - - 0 1",
             ],
         ),
     ]

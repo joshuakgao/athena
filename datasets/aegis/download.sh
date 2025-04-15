@@ -3,25 +3,15 @@ source activate
 conda activate athena
 
 # CCRL Games
-wget https://computerchess.org.uk/ccrl/4040/CCRL-4040.[2078348].pgn.7z -P datasets/aegis/raw_data/
-7z x datasets/aegis/raw_data/CCRL-4040.\[2078348\].pgn.7z -odatasets/aegis/raw_data/
-rm datasets/aegis/raw_data/CCRL-4040.\[2078348\].pgn.7z
-mv datasets/aegis/raw_data/CCRL-4040.\[2078348\].pgn datasets/aegis/raw_data/ccrl4040.pgn
+wget https://computerchess.org.uk/ccrl/4040/CCRL-4040-commented.[2078348].pgn.7z -P datasets/aegis/raw_data/
+7z x datasets/aegis/raw_data/CCRL-4040-commented.\[2078348\].pgn.7z -odatasets/aegis/raw_data/
+rm datasets/aegis/raw_data/CCRL-4040-commented.\[2078348\].pgn.7z
+mv datasets/aegis/raw_data/CCRL-4040-commented.\[2078348\].pgn datasets/aegis/raw_data/ccrl4040-commented.pgn
 
-wget https://www.computerchess.org.uk/ccrl/404/CCRL-404.[1563236].pgn.7z -P datasets/aegis/raw_data/
-7z x datasets/aegis/raw_data/CCRL-404.\[1563236\].pgn.7z -odatasets/aegis/raw_data/
-rm datasets/aegis/raw_data/CCRL-404.\[1563236\].pgn.7z
-mv datasets/aegis/raw_data/CCRL-404.\[1563236\].pgn datasets/aegis/raw_data/ccrl404.pgn
-
-wget https://computerchess.org.uk/ccrl/404FRC/CCRL-404FRC.[736287].pgn.7z -P datasets/aegis/raw_data/
-7z x datasets/aegis/raw_data/CCRL-404FRC.\[736287\].pgn.7z -odatasets/aegis/raw_data/
-rm datasets/aegis/raw_data/CCRL-404FRC.\[736287\].pgn.7z
-mv datasets/aegis/raw_data/CCRL-404FRC.\[736287\].pgn datasets/aegis/raw_data/ccrl404frc.pgn
-
-wget https://computerchess.org.uk/ccrl/402.archive/CCRL.40-2.Archive.[2165313].pgn.7z -P datasets/aegis/raw_data/
-7z x datasets/aegis/raw_data/CCRL.40-2.Archive.\[2165313\].pgn.7z -odatasets/aegis/raw_data/
-rm datasets/aegis/raw_data/CCRL.40-2.Archive.\[2165313\].pgn.7z
-mv datasets/aegis/raw_data/CCRL.40-2.Archive.\[2165313\].pgn datasets/aegis/raw_data/ccrl40-2archive.pgn
+wget https://computerchess.org.uk/ccrl/Chess324/CCRL-Chess324-commented.[66600].pgn.7z -P datasets/aegis/raw_data/
+7z x datasets/aegis/raw_data/CCRL-Chess324-commented.\[66600\].pgn.7z -odatasets/aegis/raw_data/
+rm datasets/aegis/raw_data/CCRL-Chess324-commented.\[66600\].pgn.7z
+mv datasets/aegis/raw_data/CCRL-Chess324-commented.\[66600\].pgn datasets/aegis/raw_data/ccrlchess324-commented.pgn
 
 # Leela Selfplay Games
 curl -L -o datasets/aegis/raw_data/leela-chess-zero-self-play-chess-games-dataset-1.zip\
@@ -83,3 +73,8 @@ gdown 17j1U2mJ8dBf6O8FE5yhEhUmpUJtfIjwn -O datasets/aegis/raw_data/stockfish_gam
 gunzip datasets/aegis/raw_data/stockfish_games_1.pgn.gz
 gunzip datasets/aegis/raw_data/stockfish_games_2.pgn.gz
 gunzip datasets/aegis/raw_data/stockfish_games_3.pgn.gz
+
+# Lichess Evaluated Positions
+wget https://database.lichess.org/lichess_db_eval.jsonl.zst -P datasets/aegis/raw_data/
+pzstd -d datasets/aegis/raw_data/lichess_db_eval.jsonl.zst
+rm datasets/aegis/raw_data_/lichess_db_eval.jsonl.zst
