@@ -11,7 +11,6 @@ from pathlib import Path
 import chess
 import chess.pgn
 import numpy as np
-import pandas as pd
 import psutil
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -19,7 +18,6 @@ from tqdm import tqdm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from utils.logger import logger
-
 
 # --- Configuration ---
 raw_dir = "datasets/aegis/raw_data"

@@ -17,189 +17,22 @@ from utils.chess_utils import column_letter_to_num, is_uci_valid
 
 
 class AegisDataset:
-    def __init__(self, dir="datasets/aegis/data"):
-        self.train_dataset = AegisTrainDataset(dir)
+    def __init__(self, dir="datasets/aegis/data", train_n=10_000_000):
+        self.train_dataset = AegisTrainDataset(dir, n=train_n)
         self.test_dataset = AegisTestDataset(dir)
 
     def encode_input(self, fens, histories):
-        """
-        Encode a batch of FEN strings into a batch of input tensors with shape (batch_size, 69, 8, 8).
-        8 layers for each piece type (pawn, knight, bishop, rook, queen, king),
-        1 layer for castling rights, 1 layer for en passant square,
-        8 fens are then encoded in this manner (1 current + 7 history),
-        1 layer for repetition count, 1 layer for halfmove clock,
-        1 layer for fullmove number, and 1 layer for turn.
-        The last layer is a constant 1s tensor to indicate the board area to reduce the effect of edge blurring in the convlutional layers.
-        """
-        batch_size = len(fens)
-        inputs = np.zeros((batch_size, 62, 8, 8), dtype=np.float32)
-
-        types = ["p", "n", "b", "r", "q", "k"]
-        for i, (fen, history) in enumerate(zip(fens, histories)):
-            history = list(history)
-            while len(history) < 7:
-                history.append(None)
-
-            board = chess.Board(fen, chess960=True)
-            layer_idx = 0
-
-            history.insert(0, fen)
-            for _fen in history:
-                _board = chess.Board(_fen, chess960=True)
-                if _fen == None:
-                    for _ in range(7):
-                        inputs[i, layer_idx, :, :] = np.zeros((8, 8), dtype=np.float32)
-                        layer_idx += 1
-                    continue
-                # Encode board position for each piece type
-                for type in types:
-                    s = str(_board)
-                    s = re.sub(f"[^{type}{type.upper()} \n]", ".", s)
-                    s = re.sub(f"{type}", "-1", s)
-                    s = re.sub(f"{type.upper()}", "1", s)
-                    s = re.sub(f"\.", "0", s)
-                    board_mat = [
-                        [int(x) for x in row.split(" ")] for row in s.split("\n")
-                    ]
-                    inputs[i, layer_idx, :, :] = np.array(board_mat)
-                    layer_idx += 1
-
-                # Encode castling rights
-                castling_tensor = np.zeros((8, 8), dtype=np.float32)
-                if board.has_kingside_castling_rights(chess.WHITE):
-                    castling_tensor[7, 7] = 1
-                if board.has_queenside_castling_rights(chess.WHITE):
-                    castling_tensor[7, 0] = 1
-                if board.has_kingside_castling_rights(chess.BLACK):
-                    castling_tensor[0, 7] = -1
-                if board.has_queenside_castling_rights(chess.BLACK):
-                    castling_tensor[0, 0] = -1
-                inputs[i, layer_idx, :, :] = castling_tensor
-                layer_idx += 1
-
-            # Encode en passant square
-            ep_square = board.ep_square
-            if ep_square is not None:
-                ep_row, ep_col = chess.square_rank(ep_square), chess.square_file(
-                    ep_square
-                )
-                turn = board.turn
-                if turn == chess.WHITE:
-                    inputs[i, layer_idx, ep_row, ep_col] = 1
-                else:
-                    inputs[i, layer_idx, ep_row, ep_col] = -1
-            else:
-                inputs[i, layer_idx, :, :] = np.zeros((8, 8), dtype=np.float32)
-            layer_idx += 1
-
-            # Encode repetition
-            repetition_count = 0
-            if board.is_repetition(count=1):
-                repetition_count = 1
-            elif board.is_repetition(count=2):
-                repetition_count = 2
-            elif board.is_repetition(count=3):
-                repetition_count = 3
-            elif board.is_repetition(count=4):
-                repetition_count = 4
-            elif board.is_repetition(count=5):
-                repetition_count = 5
-            elif board.is_repetition(count=6):
-                repetition_count = 6
-            elif board.is_repetition(count=7):
-                repetition_count = 7
-            inputs[i, layer_idx, :, :] = np.full(
-                (8, 8), repetition_count, dtype=np.float32
-            )
-            layer_idx += 1
-
-            # Encode number of halfmoves with no capture or pawn move
-            halfmove_count = board.halfmove_clock
-            inputs[i, layer_idx, :, :] = np.full(
-                (8, 8), halfmove_count, dtype=np.float32
-            )
-            layer_idx += 1
-
-            # Encode number of fullmoves
-            fullmove_count = board.fullmove_number
-            inputs[i, layer_idx, :, :] = np.full(
-                (8, 8), fullmove_count, dtype=np.float32
-            )
-            layer_idx += 1
-
-            # Encode turn
-            turn = board.turn
-            if turn == chess.WHITE:
-                inputs[i, layer_idx, :, :] = 1
-            else:
-                inputs[i, layer_idx, :, :] = -1
-            layer_idx += 1
-
-            # Encode board
-            inputs[i, layer_idx, :, :] = np.ones((8, 8), dtype=np.float32)
-            layer_idx += 1
-
-        return torch.tensor(inputs)
+        return _encode_input(fens, histories)
 
     def encode_output(self, ucis):
-        """Encode a batch of UCI moves to a batch of output tensors with shape (batch_size, 2, 8, 8)."""
-        batch_size = len(ucis)
-        outputs = np.zeros((batch_size, 2, 8, 8), dtype=np.float32)
+        return _encode_output(ucis)
 
-        for i, uci in enumerate(ucis):
-            assert is_uci_valid(uci)
-
-            # "From" square
-            from_row, from_col = 8 - int(uci[1]), column_letter_to_num(uci[0])
-            outputs[i, 0, from_row, from_col] = 1
-
-            # "To" square
-            to_row, to_col = 8 - int(uci[3]), column_letter_to_num(uci[2])
-            outputs[i, 1, to_row, to_col] = 1
-
-        return torch.tensor(outputs)
-
-    def decode_output(self, policies, fens):
-        """Decode policy output tensor (shape [2, 8, 8]) to a single UCI move."""
-        best_moves = []
-        for policy, fen in zip(policies, fens):
-            board = chess.Board(fen, chess960=True)
-            if not board.is_valid():
-                board = chess.Board(fen, chess960=True)
-
-            legal_moves = list(board.legal_moves)
-            if not legal_moves:
-                return None
-
-            # Check policy tensor shape
-            assert policy.shape == (2, 8, 8)
-
-            # Flatten the policy layers
-            policy_from_flat = policy[0].flatten()
-            policy_to_flat = policy[1].flatten()
-
-            # Apply softmax to the flattened policy layers
-            policy_from = torch.softmax(policy_from_flat, dim=-1).reshape(8, 8)
-            policy_to = torch.softmax(policy_to_flat, dim=-1).reshape(8, 8)
-
-            # Score each legal move
-            move_scores = []
-            for move in legal_moves:
-                from_sq = (7 - (move.from_square // 8), move.from_square % 8)
-                to_sq = (7 - (move.to_square // 8), move.to_square % 8)
-                score = (
-                    policy_from[from_sq[0], from_sq[1]] * policy_to[to_sq[0], to_sq[1]]
-                )
-                move_scores.append(score.item())
-
-            # Select move with highest score
-            best_move = legal_moves[np.argmax(move_scores)]
-            best_moves.append(best_move)
-        return best_moves
+    def decode_output(self, fens, policies):
+        return _decode_output(fens, policies)
 
 
 class AegisTrainDataset(Dataset):
-    def __init__(self, dir="datasets/aegis/data"):
+    def __init__(self, dir="datasets/aegis/data", n=10_000_000):
         """
         Args:
             dir: Directory containing the dataset
@@ -211,6 +44,7 @@ class AegisTrainDataset(Dataset):
         ]
         self.metadata_path = self.dir / "metadata.json"
         self.data = pd.DataFrame(columns=["fen", "history", "best_move"])
+        self.n = n
 
         # Load metadata
         with open(self.metadata_path, "r") as f:
@@ -218,7 +52,7 @@ class AegisTrainDataset(Dataset):
 
         self.sample_dataset()
 
-    def sample_dataset(self, approx_n=10_000_000):
+    def sample_dataset(self):
         # Clear existing data
         self.data = pd.DataFrame(columns=["fen", "history", "best_move"])
         train_set_size = self.metadata["train_set_size"]
@@ -226,11 +60,11 @@ class AegisTrainDataset(Dataset):
         # Don't divide by 0
         assert train_set_size > 0
 
-        # Get percentage of dataset we want, based on approx_n
-        sampling_rate = approx_n / train_set_size
+        # Get percentage of dataset we want, based on self.n
+        sampling_rate = self.n / train_set_size
 
         rows = []
-        for shard_path in tqdm(self.shard_paths, desc=f"Sampling ~{approx_n} of Aegis"):
+        for shard_path in tqdm(self.shard_paths, desc=f"Sampling ~{self.n} of Aegis"):
             df = pd.read_parquet(shard_path)
             for _, row in df.iterrows():
                 if random.random() < sampling_rate:
@@ -251,8 +85,8 @@ class AegisTrainDataset(Dataset):
         fen = row["fen"]
         history = list(row["history"])
         best_move = row["best_move"]
-        x = self.encode_input([fen], [history])
-        y = self.encode_output([best_move])
+        x = _encode_input([fen], [history])
+        y = _encode_output([best_move])
         return x[0], y[0], fen, best_move
 
 
@@ -292,6 +126,173 @@ class AegisTestDataset(Dataset):
         fen = row["fen"]
         history = list(row["history"])
         best_move = row["best_move"]
-        x = self.encode_input([fen], [history])
-        y = self.encode_output([best_move])
+        x = _encode_input([fen], [history])
+        y = _encode_output([best_move])
         return x[0], y[0], fen, best_move
+
+
+def _encode_input(fens, histories):
+    """
+    Encode a batch of FEN strings into a batch of input tensors with shape (batch_size, 69, 8, 8).
+    8 layers for each piece type (pawn, knight, bishop, rook, queen, king),
+    1 layer for castling rights, 1 layer for en passant square,
+    8 fens are then encoded in this manner (1 current + 7 history),
+    1 layer for repetition count, 1 layer for halfmove clock,
+    1 layer for fullmove number, and 1 layer for turn.
+    The last layer is a constant 1s tensor to indicate the board area to reduce the effect of edge blurring in the convlutional layers.
+    """
+    batch_size = len(fens)
+    inputs = np.zeros((batch_size, 62, 8, 8), dtype=np.float32)
+
+    types = ["p", "n", "b", "r", "q", "k"]
+    for i, (fen, history) in enumerate(zip(fens, histories)):
+        history = list(history)
+        while len(history) < 7:
+            history.append(None)
+
+        board = chess.Board(fen, chess960=True)
+        layer_idx = 0
+
+        history.insert(0, fen)
+        for _fen in history:
+            _board = chess.Board(_fen, chess960=True)
+            if _fen == None:
+                for _ in range(7):
+                    inputs[i, layer_idx, :, :] = np.zeros((8, 8), dtype=np.float32)
+                    layer_idx += 1
+                continue
+            # Encode board position for each piece type
+            for type in types:
+                s = str(_board)
+                s = re.sub(f"[^{type}{type.upper()} \n]", ".", s)
+                s = re.sub(f"{type}", "-1", s)
+                s = re.sub(f"{type.upper()}", "1", s)
+                s = re.sub(f"\.", "0", s)
+                board_mat = [[int(x) for x in row.split(" ")] for row in s.split("\n")]
+                inputs[i, layer_idx, :, :] = np.array(board_mat)
+                layer_idx += 1
+
+            # Encode castling rights
+            castling_tensor = np.zeros((8, 8), dtype=np.float32)
+            if board.has_kingside_castling_rights(chess.WHITE):
+                castling_tensor[7, 7] = 1
+            if board.has_queenside_castling_rights(chess.WHITE):
+                castling_tensor[7, 0] = 1
+            if board.has_kingside_castling_rights(chess.BLACK):
+                castling_tensor[0, 7] = -1
+            if board.has_queenside_castling_rights(chess.BLACK):
+                castling_tensor[0, 0] = -1
+            inputs[i, layer_idx, :, :] = castling_tensor
+            layer_idx += 1
+
+        # Encode en passant square
+        ep_square = board.ep_square
+        if ep_square is not None:
+            ep_row, ep_col = chess.square_rank(ep_square), chess.square_file(ep_square)
+            turn = board.turn
+            if turn == chess.WHITE:
+                inputs[i, layer_idx, ep_row, ep_col] = 1
+            else:
+                inputs[i, layer_idx, ep_row, ep_col] = -1
+        else:
+            inputs[i, layer_idx, :, :] = np.zeros((8, 8), dtype=np.float32)
+        layer_idx += 1
+
+        # Encode repetition
+        repetition_count = 0
+        if board.is_repetition(count=1):
+            repetition_count = 1
+        elif board.is_repetition(count=2):
+            repetition_count = 2
+        elif board.is_repetition(count=3):
+            repetition_count = 3
+        elif board.is_repetition(count=4):
+            repetition_count = 4
+        elif board.is_repetition(count=5):
+            repetition_count = 5
+        elif board.is_repetition(count=6):
+            repetition_count = 6
+        elif board.is_repetition(count=7):
+            repetition_count = 7
+        inputs[i, layer_idx, :, :] = np.full((8, 8), repetition_count, dtype=np.float32)
+        layer_idx += 1
+
+        # Encode number of halfmoves with no capture or pawn move
+        halfmove_count = board.halfmove_clock
+        inputs[i, layer_idx, :, :] = np.full((8, 8), halfmove_count, dtype=np.float32)
+        layer_idx += 1
+
+        # Encode number of fullmoves
+        fullmove_count = board.fullmove_number
+        inputs[i, layer_idx, :, :] = np.full((8, 8), fullmove_count, dtype=np.float32)
+        layer_idx += 1
+
+        # Encode turn
+        turn = board.turn
+        if turn == chess.WHITE:
+            inputs[i, layer_idx, :, :] = 1
+        else:
+            inputs[i, layer_idx, :, :] = -1
+        layer_idx += 1
+
+        # Encode board
+        inputs[i, layer_idx, :, :] = np.ones((8, 8), dtype=np.float32)
+        layer_idx += 1
+
+    return torch.tensor(inputs)
+
+
+def _encode_output(ucis):
+    """Encode a batch of UCI moves to a batch of output tensors with shape (batch_size, 2, 8, 8)."""
+    batch_size = len(ucis)
+    outputs = np.zeros((batch_size, 2, 8, 8), dtype=np.float32)
+
+    for i, uci in enumerate(ucis):
+        assert is_uci_valid(uci)
+
+        # "From" square
+        from_row, from_col = 8 - int(uci[1]), column_letter_to_num(uci[0])
+        outputs[i, 0, from_row, from_col] = 1
+
+        # "To" square
+        to_row, to_col = 8 - int(uci[3]), column_letter_to_num(uci[2])
+        outputs[i, 1, to_row, to_col] = 1
+
+    return torch.tensor(outputs)
+
+
+def _decode_output(policies, fens):
+    """Decode policy output tensor (shape [2, 8, 8]) to a single UCI move."""
+    best_moves = []
+    for policy, fen in zip(policies, fens):
+        board = chess.Board(fen, chess960=True)
+        if not board.is_valid():
+            board = chess.Board(fen, chess960=True)
+
+        legal_moves = list(board.legal_moves)
+        if not legal_moves:
+            return None
+
+        # Check policy tensor shape
+        assert policy.shape == (2, 8, 8)
+
+        # Flatten the policy layers
+        policy_from_flat = policy[0].flatten()
+        policy_to_flat = policy[1].flatten()
+
+        # Apply softmax to the flattened policy layers
+        policy_from = torch.softmax(policy_from_flat, dim=-1).reshape(8, 8)
+        policy_to = torch.softmax(policy_to_flat, dim=-1).reshape(8, 8)
+
+        # Score each legal move
+        move_scores = []
+        for move in legal_moves:
+            from_sq = (7 - (move.from_square // 8), move.from_square % 8)
+            to_sq = (7 - (move.to_square // 8), move.to_square % 8)
+            score = policy_from[from_sq[0], from_sq[1]] * policy_to[to_sq[0], to_sq[1]]
+            move_scores.append(score.item())
+
+        # Select move with highest score
+        best_move = legal_moves[np.argmax(move_scores)]
+        best_moves.append(best_move)
+    return best_moves

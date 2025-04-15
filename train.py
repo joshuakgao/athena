@@ -25,10 +25,11 @@ with open("train_config.json", "r") as f:
     TEST_SPLIT_RATIO = config.get("test_split_ratio", 0.2)  # Default to 20% test data
     USE_WANDB = config.get("use_wandb", False)
     NUM_RES_BLOCKS = config.get("num_res_blocks", 19)
+    TRAIN_SAMPLES_PER_EPOCH = config.get("train_samples_per_epoch", 10_000_000)
 
 
 # Create the dataset and split it into training and testing sets
-aegis = AegisDataset()
+aegis = AegisDataset(train_n=TRAIN_SAMPLES_PER_EPOCH)
 iters_in_an_epoch = max(len(aegis.train_dataset) // BATCH_SIZE, 1)
 EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 10, 1)
 CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 100, 1)
