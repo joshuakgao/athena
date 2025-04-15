@@ -145,12 +145,6 @@ logger.info("Training started")
 model.train()
 best_accuracy = -1
 for epoch in tqdm(range(NUM_EPOCHS)):
-    # Learning rate decay
-    if epoch > 0 and epoch % LR_DECAY_STEPS == 0:
-        for param_group in optimizer.param_groups:
-            param_group["lr"] *= LR_DECAY_RATE
-        logger.info(f"Reduced learning rate to {optimizer.param_groups[0]['lr']}")
-
     for batch_idx, (X, Y, fens, best_moves) in enumerate(train_dataloader):
         # Move data to device
         X = X.to(model.device)
@@ -213,6 +207,10 @@ for epoch in tqdm(range(NUM_EPOCHS)):
 
     # Resample aegis training set
     aegis.train_dataset.sample_dataset()
+
+    # Lr decay
+    scheduler.step()
+    logger.info(f"New learning rate: {scheduler.get_last_lr()[0]}")
 
 if USE_WANDB:
     wandb.finish()
