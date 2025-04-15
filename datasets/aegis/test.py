@@ -26,6 +26,7 @@ def validate(tests):
         for name, fen, history in tests:
             matches = df[(df["fen"] == fen)]
             for _, row in matches.iterrows():
+                # print(row.to_dict())
                 if list(row["history"]) == history:
                     test_results[name] += 1
 

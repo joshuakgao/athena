@@ -26,9 +26,9 @@ dir = "datasets/aegis/data"
 temp_dir_path = Path("datasets/aegis/temp_parquet")
 output_dir_path = Path(dir)
 test_output_path = output_dir_path / "test.parquet"  # Path for test set
-rows_per_temp_parquet_write = 1_000_000
+rows_per_temp_parquet_write = 100_000
 positions_per_shard = 1_000_000
-min_elo_threshold = 3000
+min_elo_threshold = 2500
 min_depth_threshold = 5
 samples_per_shard_for_test = 10  # Number of samples per shard for test set
 
@@ -151,7 +151,7 @@ def normalize_fen(fen_string):
 def extract_eval_and_depth(comment):
     """
     Extracts centipawn evaluation and depth from a PGN comment.
-    Example comment: {+0.28/4 0.17s}
+    Looks for pattern like {+0.28/4 0.17s}
     Returns: (eval_cp, depth)
     """
     match = re.search(r"([+-]?\d+(\.\d+)?)/(\d+)", comment)
@@ -259,7 +259,7 @@ def parse_jsonl_into_parquet(jsonl_path, temp_dir_path, schema, rows_per_write=5
                             fen_history.appendleft(fen)
                             try:
                                 board.push_uci(best_move)
-                            except ValueError:
+                            except:
                                 logger.warning(
                                     f"Invalid move '{best_move}' encountered. Breaking out."
                                 )
@@ -388,13 +388,35 @@ def generate():
                         for node in game.mainline():
                             move = node.move
                             current_fen_unnormalized = board.fen()
+
+                            # Validate move BEFORE pushing
+                            if (
+                                move.uci() not in ["e1g1", "e1c1", "e8g8", "e8c8"]
+                                and move not in board.legal_moves
+                            ):
+                                print(starting_fen)
+                                logger.warning(
+                                    f"Illegal move {move.uci()} in position {board.fen()}"
+                                )
+                                break  # or continue to skip just this move
+
+                            # Get move info before pushing
                             next_move_uci = move.uci()
                             comment = node.comment
                             eval_cp, depth = None, None
                             if comment:
                                 eval_cp, depth = extract_eval_and_depth(comment)
 
-                            if eval_cp is None or depth is None:
+                                if eval_cp is None or depth is None:
+                                    eval_cp = 0
+                                    depth = 5
+                            else:
+                                board.push(
+                                    move
+                                )  # Still need to advance even if we skip
+                                last_seven_fens.appendleft(
+                                    normalize_fen(current_fen_unnormalized)
+                                )
                                 continue
 
                             norm_fen = normalize_fen(current_fen_unnormalized)
@@ -407,23 +429,13 @@ def generate():
                                 )
                                 continue
 
-                            try:
-                                board.push(move)
-                            except ValueError:
-                                break
-
-                            if not board.is_valid():
-                                logger.warning(
-                                    f"Board invalid before move {next_move_uci} in game {total_games}. "
-                                    f"FEN: {current_fen_unnormalized}. Skipping rest of game."
-                                )
-                                break
+                            # Only push the move once we've validated everything
+                            board.push(move)
 
                             fen_parts = current_fen_unnormalized.split()
                             active_color = fen_parts[1] if len(fen_parts) > 1 else "w"
                             elo = white_elo if active_color == "w" else black_elo
                             bot = white_bot if active_color == "w" else black_bot
-
                             if (
                                 elo >= min_elo_threshold
                                 and depth >= min_depth_threshold
@@ -441,26 +453,22 @@ def generate():
                                 positions_in_file_batch += 1
                                 input_positions_estimate += 1
 
-                                if (
-                                    len(current_temp_batch)
-                                    >= rows_per_temp_parquet_write
-                                ):
-                                    temp_file_path = (
-                                        temp_dir_path
-                                        / f"temp_{temp_file_index}.parquet"
-                                    )
-                                    written = write_batch_to_parquet(
-                                        current_temp_batch, temp_file_path, ARROW_SCHEMA
-                                    )
-                                    if written > 0:
-                                        logger.info(
-                                            f"Written temp batch to {temp_file_path.name} ({written} records)"
-                                        )
-                                        temp_file_index += 1
-                                    total_written_to_temp += written
-                                    current_temp_batch.clear()
-
                             last_seven_fens.appendleft(norm_fen)
+
+                            if len(current_temp_batch) >= rows_per_temp_parquet_write:
+                                temp_file_path = (
+                                    temp_dir_path / f"temp_{temp_file_index}.parquet"
+                                )
+                                written = write_batch_to_parquet(
+                                    current_temp_batch, temp_file_path, ARROW_SCHEMA
+                                )
+                                if written > 0:
+                                    logger.info(
+                                        f"Written temp batch to {temp_file_path.name} ({written} records)"
+                                    )
+                                    temp_file_index += 1
+                                total_written_to_temp += written
+                                current_temp_batch.clear()
 
                 logger.info(
                     f"Finished {pgn_path.name}. Games: {games_in_file}. Positions added: {positions_in_file_batch}."
