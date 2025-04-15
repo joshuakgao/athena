@@ -150,12 +150,12 @@ def _encode_input(fens, histories):
         while len(history) < 7:
             history.append(None)
 
-        board = chess.Board(fen, chess960=True)
+        board = chess.Board(fen)
         layer_idx = 0
 
         history.insert(0, fen)
         for _fen in history:
-            _board = chess.Board(_fen, chess960=True)
+            _board = chess.Board(_fen)
             if _fen == None:
                 for _ in range(7):
                     inputs[i, layer_idx, :, :] = np.zeros((8, 8), dtype=np.float32)
@@ -265,10 +265,7 @@ def _decode_output(policies, fens):
     """Decode policy output tensor (shape [2, 8, 8]) to a single UCI move."""
     best_moves = []
     for policy, fen in zip(policies, fens):
-        board = chess.Board(fen, chess960=True)
-        if not board.is_valid():
-            board = chess.Board(fen, chess960=True)
-
+        board = chess.Board(fen)
         legal_moves = list(board.legal_moves)
         if not legal_moves:
             return None
