@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH -J athena
-#SBATCH -o athena.o%j
+#SBATCH -J bash
+#SBATCH -o bash.o%j
 #SBATCH --ntasks-per-node=1 -N 1
 #SBATCH -t 5-96:0:0
 #SBATCH --mem-per-cpu=64GB

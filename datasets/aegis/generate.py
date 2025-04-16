@@ -410,6 +410,8 @@ def generate():
                                 if eval_cp is None or depth is None:
                                     eval_cp = 0
                                     depth = 5
+
+                                eval_cp = min(max(eval_cp, -9999), 9999)
                             else:
                                 board.push(
                                     move
