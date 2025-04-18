@@ -21,14 +21,14 @@ class AegisDataset:
         self.train_dataset = AegisTrainDataset(dir, n=train_n)
         self.test_dataset = AegisTestDataset(dir)
 
-    def encode_input(self, fens, histories):
-        return _encode_input(fens, histories)
+    def encode_position(self, fens, histories):
+        return _encode_position(fens, histories)
 
-    def encode_output(self, ucis):
-        return _encode_output(ucis)
+    def encode_move(self, ucis):
+        return _encode_move(ucis)
 
-    def decode_output(self, fens, policies):
-        return _decode_output(fens, policies)
+    def decode_move_policy(self, fens, policies):
+        return _decode_move_policy(fens, policies)
 
 
 class AegisTrainDataset(Dataset):
@@ -73,11 +73,13 @@ class AegisTrainDataset(Dataset):
                             "fen": row["fen"],
                             "history": row["history"],
                             "best_move": row["best_move"],
+                            "eval": row["eval"],
                         }
                     )
         self.data = pd.DataFrame(rows)
 
     def __len__(self):
+        # len of dataset, not of entire dataset
         return len(self.data)
 
     def __getitem__(self, idx):
@@ -85,9 +87,11 @@ class AegisTrainDataset(Dataset):
         fen = row["fen"]
         history = list(row["history"])
         best_move = row["best_move"]
-        x = _encode_input([fen], [history])
-        y = _encode_output([best_move])
-        return x[0], y[0], fen, best_move
+        centipawn = row["eval"]
+        x = _encode_position([fen], [history])
+        y = _encode_move([best_move])
+        v = _encode_centipawn([centipawn])
+        return x[0], y[0], v[0]
 
 
 class AegisTestDataset(Dataset):
@@ -114,6 +118,7 @@ class AegisTestDataset(Dataset):
                     "fen": row["fen"],
                     "history": row["history"],
                     "best_move": row["best_move"],
+                    "eval": row["eval"],
                 }
             )
         self.data = pd.DataFrame(rows)
@@ -126,12 +131,14 @@ class AegisTestDataset(Dataset):
         fen = row["fen"]
         history = list(row["history"])
         best_move = row["best_move"]
-        x = _encode_input([fen], [history])
-        y = _encode_output([best_move])
-        return x[0], y[0], fen, best_move
+        centipawn = row["eval"]
+        x = _encode_position([fen], [history])
+        y = _encode_move([best_move])
+        v = _encode_centipawn([centipawn])
+        return x[0], y[0], v[0], fen, best_move, centipawn
 
 
-def _encode_input(fens, histories):
+def _encode_position(fens, histories):
     """
     Encode a batch of FEN strings into a batch of input tensors with shape (batch_size, 59, 8, 8).
     6 layers for each piece type (pawn, knight, bishop, rook, queen, king), 1 layer for castling rights
@@ -218,7 +225,12 @@ def _encode_input(fens, histories):
     return torch.tensor(inputs)
 
 
-def _encode_output(ucis):
+def _encode_centipawn(evals):
+    centipawn_evals = np.tanh(np.array(evals, dtype=np.float32))
+    return torch.tensor(centipawn_evals).unsqueeze(1)
+
+
+def _encode_move(ucis):
     """Encode a batch of UCI moves to a batch of output tensors with shape (batch_size, 2, 8, 8)."""
     batch_size = len(ucis)
     outputs = np.zeros((batch_size, 2, 8, 8), dtype=np.float32)
@@ -237,7 +249,7 @@ def _encode_output(ucis):
     return torch.tensor(outputs)
 
 
-def _decode_output(policies, fens):
+def _decode_move_policy(policies, fens):
     """Decode policy output tensor (shape [2, 8, 8]) to a single UCI move."""
     best_moves = []
     for policy, fen in zip(policies, fens):

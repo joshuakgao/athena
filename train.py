@@ -1,216 +1,186 @@
-import json
-import os
-import sys
-
-import torch
-import torch.nn.functional as F
+import json, os, sys
+import torch, torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
 import wandb
+
 from architecture import Athena
 from datasets.aegis.dataset import AegisDataset
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
-from utils.logger import logger
+from utils.logger import logger  # your own logging helper
 
-# Get training configs
+# ─────────────────────────── CONFIG ───────────────────────────
 with open("train_config.json", "r") as f:
-    config = json.load(f)
-    MODEL_NAME = config.get("model_name")
-    NUM_EPOCHS = config["num_epochs"]
-    LR = config["lr"]
-    LR_DECAY_RATE = config.get("lr_decay_rate", 0.1)  # Default to 0.1
-    BATCH_SIZE = config["batch_size"]
-    TEST_SPLIT_RATIO = config.get("test_split_ratio", 0.2)  # Default to 20% test data
-    USE_WANDB = config.get("use_wandb", False)
-    NUM_RES_BLOCKS = config.get("num_res_blocks", 19)
-    TRAIN_SAMPLES_PER_EPOCH = config.get("train_samples_per_epoch", 10_000_000)
+    cfg = json.load(f)
 
+MODEL_NAME = cfg.get("model_name")
+NUM_EPOCHS = cfg["num_epochs"]
+LR = cfg["lr"]
+LR_DECAY_RATE = cfg.get("lr_decay_rate", 0.1)
+BATCH_SIZE = cfg["batch_size"]
+USE_WANDB = cfg.get("use_wandb", False)
+NUM_RES_BLOCKS = cfg.get("num_res_blocks", 19)
+TRAIN_SAMPLES_PER_EPOCH = cfg.get("train_samples_per_epoch", 10_000_000)
 
-# Create the dataset and split it into training and testing sets
-aegis = AegisDataset(train_n=TRAIN_SAMPLES_PER_EPOCH)
-iters_in_an_epoch = max(len(aegis.train_dataset) // BATCH_SIZE, 1)
-EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 10, 1)
-CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 100, 1)
-logger.info(
-    f"Check Metrics Interval: {CHECK_METRICS_INTERVAL}. Eval Model Interval: {EVAL_MODEL_INTERVAL}"
-)
-LR_DECAY_STEPS = iters_in_an_epoch
+# ─────────────────────────── DATA ─────────────────────────────
+aegis = AegisDataset(train_n=TRAIN_SAMPLES_PER_EPOCH)  # yields 5 items
+iters_in_epoch = max(len(aegis.train_dataset) // BATCH_SIZE, 1)
+CHECK_METRICS_INT = max(iters_in_epoch // 100, 1)
+EVAL_MODEL_INT = max(iters_in_epoch // 10, 1)
 
 logger.info(
-    f"Train size: {len(aegis.train_dataset)}, Test size: {len(aegis.test_dataset)}"
+    f"Train size: {len(aegis.train_dataset)}, " f"Test size: {len(aegis.test_dataset)}"
+)
+logger.info(
+    f"Metrics every {CHECK_METRICS_INT} iters, " f"Eval every {EVAL_MODEL_INT} iters"
 )
 
-# Create DataLoaders for training and testing
-train_dataloader = DataLoader(aegis.train_dataset, batch_size=BATCH_SIZE)
-test_dataloader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
+train_loader = DataLoader(aegis.train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 
-# Create the model, loss function, and optimizer
-model = Athena(input_channels=62, num_res_blocks=NUM_RES_BLOCKS)
-model.to(model.device)
+# ─────────────────────────── MODEL ────────────────────────────
+model = Athena(input_channels=62, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(
-    optimizer, step_size=LR_DECAY_STEPS, gamma=LR_DECAY_RATE
+    optimizer, step_size=iters_in_epoch, gamma=LR_DECAY_RATE
 )
 
-# Directory to save the models
-save_dir = "checkpoints"
-os.makedirs(save_dir, exist_ok=True)  # Create the directory if it doesn't exist
-
+# optional experiment tracker
 if USE_WANDB:
-    wandb.init(project="athena_chess", config=config, name=MODEL_NAME)
+    wandb.init(project="athena_chess", config=cfg, name=MODEL_NAME)
     wandb.watch(model)
 
 
-def loss_function(pred, target):
-    batch_size = pred.shape[0]
+# ─────────────────────────── LOSS ─────────────────────────────
+def loss_function(policy_pred, value_pred, policy_tgt, value_tgt):
+    """Dual‑head AlphaZero‑style loss."""
+    B = policy_pred.size(0)
 
-    from_indices = target[:, 0, :, :].view(batch_size, -1)
-    to_indices = target[:, 1, :, :].view(batch_size, -1)
+    # ---------- policy sub‑loss ----------
+    from_logits = policy_pred[:, 0].reshape(B, 64)
+    to_logits = policy_pred[:, 1].reshape(B, 64)
 
-    # Extract "from" and "to" logits
-    from_logits = pred[:, 0, :, :].view(batch_size, -1)  # [batch, 64]
-    to_logits = pred[:, 1, :, :].view(batch_size, -1)  # [batch, 64]
+    from_idx = policy_tgt[:, 0].reshape(B, 64).argmax(dim=-1)
+    to_idx = policy_tgt[:, 1].reshape(B, 64).argmax(dim=-1)
 
-    # Compute cross-entropy for "from" and "to" separately
-    loss_from = F.cross_entropy(from_logits, from_indices)
-    loss_to = F.cross_entropy(to_logits, to_indices)
+    loss_from = F.cross_entropy(from_logits, from_idx)
+    loss_to = F.cross_entropy(to_logits, to_idx)
+    loss_policy = 0.5 * (loss_from + loss_to)
 
-    # Average the two losses
-    loss = (loss_from + loss_to) / 2
-    return loss
+    # ---------- value sub‑loss ----------
+    value_pred = value_pred.squeeze(1)  # [B]
+    value_tgt = value_tgt.squeeze(1)
+    loss_value = F.mse_loss(value_pred, value_tgt)
 
-
-def eval_model(model, test_dataloader):
-    model.eval()
-    total_from_correct = 0
-    total_to_correct = 0
-    total_samples = 0
-    total_loss = 0
-
-    with torch.no_grad():
-        for X, Y, fens, best_moves in test_dataloader:
-            batch_size = X.size(0)  # Get actual batch size for this batch
-            X = X.to(model.device)
-            Y = Y.to(model.device)
-
-            # Forward pass
-            pred = model(X)
-
-            # Compute loss
-            loss = loss_function(pred, Y)
-            total_loss += loss.item() * batch_size
-
-            pred_moves = aegis.decode_output(pred, fens)
-            # Count correct predictions
-            for pred_move, best_move in zip(pred_moves, best_moves):
-                if pred_move == best_move:
-                    total_correct += 1
-
-            # Get predictions
-            from_pred = pred[:, 0, :, :].view(batch_size, -1).argmax(dim=1)
-            to_pred = pred[:, 1, :, :].view(batch_size, -1).argmax(dim=1)
-
-            # Get targets
-            from_target = Y[:, 0, :, :].view(batch_size, -1).argmax(dim=1)
-            to_target = Y[:, 1, :, :].view(batch_size, -1).argmax(dim=1)
-
-            # Update correct counts
-            total_from_correct += (from_pred == from_target).sum().item()
-            total_to_correct += (to_pred == to_target).sum().item()
-            total_samples += batch_size
-
-            # Update correct counts
-            total_from_correct += (from_pred == from_target).sum().item()
-            total_to_correct += (to_pred == to_target).sum().item()
-            total_samples += batch_size
-
-    avg_loss = total_loss / total_samples
-    from_accuracy = total_from_correct / total_samples
-    to_accuracy = total_to_correct / total_samples
-    overall_accuracy = (total_from_correct + total_to_correct) / (2 * total_samples)
-
-    return {
-        "loss": avg_loss,
-        "from_accuracy": from_accuracy,
-        "to_accuracy": to_accuracy,
-        "overall_accuracy": overall_accuracy,
+    # combine (equal weights)
+    loss = loss_policy + loss_value
+    return loss, {
+        "policy": loss_policy.detach(),
+        "from": loss_from.detach(),
+        "to": loss_to.detach(),
+        "value": loss_value.detach(),
     }
 
 
-# Training loop
+# ─────────────────────────── EVAL ─────────────────────────────
+def evaluate(model, loader):
+    model.eval()
+    total_loss = total_from = total_to = total = 0
+
+    with torch.no_grad():
+        for X, P_tgt, V_tgt, fens, best_moves in loader:
+            X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
+            P_pred, V_pred = model(X)
+
+            loss, _ = loss_function(P_pred, V_pred, P_tgt, V_tgt)
+            bs = X.size(0)
+            total_loss += loss.item() * bs
+
+            # accuracy per head
+            from_pred = P_pred[:, 0].reshape(bs, 64).argmax(1)
+            to_pred = P_pred[:, 1].reshape(bs, 64).argmax(1)
+            from_tgt = P_tgt[:, 0].reshape(bs, 64).argmax(1)
+            to_tgt = P_tgt[:, 1].reshape(bs, 64).argmax(1)
+
+            total_from += (from_pred == from_tgt).sum().item()
+            total_to += (to_pred == to_tgt).sum().item()
+
+            v_pred = V_pred.squeeze(1)
+            v_tgt = V_tgt.squeeze(1)
+            total_v_mse += F.mse_loss(v_pred, v_tgt, reduction="sum").item()
+
+            total += bs
+
+    return {
+        "eval_loss": total_loss / total,
+        "eval_value_loss": total_v_mse / total,
+        "from_acc": total_from / total,
+        "to_acc": total_to / total,
+        "eval_overall_acc": (total_from + total_to) / (2 * total),
+    }
+
+
+# ─────────────────────────── TRAIN ────────────────────────────
+best_acc = -1.0
 logger.info("Training started")
-# Set model to training mode
-model.train()
-best_accuracy = -1
-for epoch in tqdm(range(NUM_EPOCHS)):
-    for batch_idx, (X, Y, fens, best_moves) in enumerate(train_dataloader):
-        # Move data to device
-        X = X.to(model.device)
-        Y = Y.to(model.device)
 
-        # Forward pass
-        pred = model(X)
+for epoch in range(NUM_EPOCHS):
+    model.train()
+    for step, (X, P_tgt, V_tgt) in enumerate(train_loader):
+        X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
 
-        # Compute loss
-        loss = loss_function(pred, Y)
+        P_pred, V_pred = model(X)
+        loss, parts = loss_function(P_pred, V_pred, P_tgt, V_tgt)
 
-        # Backward pass and optimization
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
         scheduler.step()
 
-        # Log metrics
-        if batch_idx % CHECK_METRICS_INTERVAL == CHECK_METRICS_INTERVAL - 1:
+        # ----- quick logs -----
+        if step % CHECK_METRICS_INT == 0:
+            lr = scheduler.get_last_lr()[0]
             logger.info(
-                f"Epoch [{epoch + 1}/{NUM_EPOCHS}], Batch [{batch_idx + 1}/{len(train_dataloader)}], Loss: {loss:.4f}"
+                f"Ep {epoch+1:02d} | Iter {step:05d} | "
+                f"loss {loss:.4f} (pol {parts['policy']:.4f}, "
+                f"val {parts['value']:.4f}) | lr {lr:.2e}"
             )
             if USE_WANDB:
                 wandb.log(
                     {
                         "train_loss": loss.item(),
-                        "learning_rate": scheduler.get_last_lr()[0],
+                        "train_loss_policy": parts["policy"].item(),
+                        "train_loss_from": parts["from"].item(),
+                        "train_loss_value": parts["value"].item(),
+                        "lr": lr,
                     }
                 )
 
-        # Evaluate model periodically
-        if batch_idx % EVAL_MODEL_INTERVAL == EVAL_MODEL_INTERVAL - 1:
-            eval_metrics = eval_model(model, test_dataloader)
+        # ----- periodic evaluation -----
+        if step % EVAL_MODEL_INT == 0:
+            metrics = evaluate(model, test_loader)
             logger.info(
-                f"Evaluation - Loss: {eval_metrics['loss']:.4f}, "
-                f"From Accuracy: {eval_metrics['from_accuracy']:.4f}, "
-                f"To Accuracy: {eval_metrics['to_accuracy']:.4f}, "
-                f"Overall Accuracy: {eval_metrics['overall_accuracy']:.4f}"
+                f"[EVAL] loss {metrics['loss']:.4f} | "
+                f"from_acc {metrics['from_acc']:.3%} | "
+                f"to_acc {metrics['to_acc']:.3%} | "
+                f"overall {metrics['overall_acc']:.3%}"
             )
 
             if USE_WANDB:
-                wandb.log(
-                    {
-                        "eval_loss": eval_metrics["loss"],
-                        "eval_from_accuracy": eval_metrics["from_accuracy"],
-                        "eval_to_accuracy": eval_metrics["to_accuracy"],
-                        "eval_overall_accuracy": eval_metrics["overall_accuracy"],
-                    }
+                wandb.log({f"eval_{k}": v for k, v in metrics.items()})
+
+            if metrics["overall_acc"] > best_acc:
+                best_acc = metrics["overall_acc"]
+                os.makedirs("checkpoints", exist_ok=True)
+                torch.save(
+                    model.state_dict(), f"checkpoints/best_model_{MODEL_NAME}.pt"
                 )
+                logger.info(f"New best model saved ({best_acc:.3%})")
 
-            # Save best model
-            if eval_metrics["overall_accuracy"] > best_accuracy:
-                best_accuracy = eval_metrics["overall_accuracy"]
-                torch.save(model.state_dict(), f"{save_dir}/best_model_{MODEL_NAME}.pt")
-                logger.info(f"New best model saved with accuracy {best_accuracy:.4f}")
-
-    # Log epoch-level metrics
-    if USE_WANDB:
-        wandb.log({"epoch": epoch + 1})
-
-    # Resample aegis training set
-    aegis.train_dataset.sample_dataset()
-
-    # Lr decay
-    scheduler.step()
-    logger.info(f"New learning rate: {scheduler.get_last_lr()[0]}")
+    # end‑epoch housekeeping
+    aegis.train_dataset.sample_dataset()  # fresh sample for next epoch
+    logger.info(f"End of epoch {epoch+1} – lr is now {scheduler.get_last_lr()[0]:.2e}")
 
 if USE_WANDB:
     wandb.finish()

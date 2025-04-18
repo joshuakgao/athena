@@ -322,217 +322,205 @@ def generate():
     total_games = 0
     input_positions_estimate = 0
 
-    if not temp_files:
-        logger.info(
-            "No temporary Parquet files found. Starting First Pass: Processing PGNs..."
-        )
-        temp_file_index = 0
-        current_temp_batch = []
-        total_written_to_temp = 0
+    # if not temp_files:
+    logger.info(
+        "No temporary Parquet files found. Starting First Pass: Processing PGNs..."
+    )
+    temp_file_index = 0
+    current_temp_batch = []
+    total_written_to_temp = 0
 
-        pgn_files = sorted(list(Path(raw_dir).glob("*.pgn")))
-        if pgn_files:
-            for pgn_path in tqdm(pgn_files, desc="Processing PGN files"):
-                logger.info(f"Processing {pgn_path.name}...")
-                games_in_file = 0
-                positions_in_file_batch = 0
+    pgn_files = sorted(list(Path(raw_dir).glob("*.pgn")))
+    if pgn_files:
+        for pgn_path in tqdm(pgn_files, desc="Processing PGN files"):
+            logger.info(f"Processing {pgn_path.name}...")
+            games_in_file = 0
+            positions_in_file_batch = 0
 
-                with open(pgn_path, errors="replace", encoding="utf-8") as pgn_file:
-                    while True:
-                        game = chess.pgn.read_game(pgn_file)
-                        if game is None:
-                            break
+            with open(pgn_path, errors="replace", encoding="utf-8") as pgn_file:
+                while True:
+                    game = chess.pgn.read_game(pgn_file)
+                    if game is None:
+                        break
 
-                        total_games += 1
-                        games_in_file += 1
+                    total_games += 1
+                    games_in_file += 1
 
-                        # Parse basic info
-                        white_bot = game.headers.get("White", "Unknown")
-                        black_bot = game.headers.get("Black", "Unknown")
-                        white_elo_str = game.headers.get("WhiteElo", "0")
-                        black_elo_str = game.headers.get("BlackElo", "0")
-                        starting_fen = game.headers.get("FEN", "")
+                    # Parse basic info
+                    white_bot = game.headers.get("White", "Unknown")
+                    black_bot = game.headers.get("Black", "Unknown")
+                    white_elo_str = game.headers.get("WhiteElo", "0")
+                    black_elo_str = game.headers.get("BlackElo", "0")
+                    starting_fen = game.headers.get("FEN", "")
 
-                        # Assign ELO for known bots or parse
-                        if white_bot == "Lc0":
-                            white_elo = 3404
-                        elif white_bot == "Stockfish 101217 64 BMI2":
-                            white_elo = 3529
-                        else:
-                            white_elo = (
-                                int(white_elo_str) if white_elo_str.strip() else 0
-                            )
+                    # Assign ELO for known bots or parse
+                    if white_bot == "Lc0":
+                        white_elo = 3404
+                    elif white_bot == "Stockfish 101217 64 BMI2":
+                        white_elo = 3529
+                    else:
+                        white_elo = int(white_elo_str) if white_elo_str.strip() else 0
 
-                        if black_bot == "Lc0":
-                            black_elo = 3404
-                        elif black_bot == "Stockfish 101217 64 BMI2":
-                            black_elo = 3529
-                        else:
-                            black_elo = (
-                                int(black_elo_str) if black_elo_str.strip() else 0
-                            )
+                    if black_bot == "Lc0":
+                        black_elo = 3404
+                    elif black_bot == "Stockfish 101217 64 BMI2":
+                        black_elo = 3529
+                    else:
+                        black_elo = int(black_elo_str) if black_elo_str.strip() else 0
 
-                        # If both sides below threshold, skip entire game
+                    # If both sides below threshold, skip entire game
+                    if white_elo < min_elo_threshold and black_elo < min_elo_threshold:
+                        continue
+
+                    # Count result if the game is not skipped
+                    result = game.headers.get("Result", "")
+                    if result == "1-0":
+                        white_win_count += 1
+                    elif result == "0-1":
+                        black_win_count += 1
+                    elif result == "1/2-1/2":
+                        draw_count += 1
+
+                    if starting_fen:
+                        starting_fen = normalize_fen(starting_fen)
+                        board = chess.Board(starting_fen, chess960=True)
+                        if not board.is_valid():
+                            continue
+                    else:
+                        board = game.board()
+                    last_seven_fens = deque(maxlen=7)
+
+                    for node in game.mainline():
+                        move = node.move
+                        current_fen_unnormalized = board.fen()
+
+                        # Validate move BEFORE pushing
                         if (
-                            white_elo < min_elo_threshold
-                            and black_elo < min_elo_threshold
+                            move.uci() not in ["e1g1", "e1c1", "e8g8", "e8c8"]
+                            and move not in board.legal_moves
                         ):
+                            print(starting_fen)
+                            logger.warning(
+                                f"Illegal move {move.uci()} in position {board.fen()}"
+                            )
+                            break  # or continue to skip just this move
+
+                        # Get move info before pushing
+                        next_move_uci = move.uci()
+                        comment = node.comment
+                        eval_cp, depth = None, None
+                        if comment:
+                            eval_cp, depth = extract_eval_and_depth(comment)
+
+                            if eval_cp is None or depth is None:
+                                eval_cp = 0
+                                depth = 0  # book move
+
+                            eval_cp = min(max(eval_cp, -9999), 9999)
+                        else:
+                            board.push(move)  # Still need to advance even if we skip
+                            last_seven_fens.appendleft(
+                                normalize_fen(current_fen_unnormalized)
+                            )
                             continue
 
-                        # Count result if the game is not skipped
-                        result = game.headers.get("Result", "")
-                        if result == "1-0":
-                            white_win_count += 1
-                        elif result == "0-1":
-                            black_win_count += 1
-                        elif result == "1/2-1/2":
-                            draw_count += 1
+                        norm_fen = normalize_fen(current_fen_unnormalized)
+                        if (
+                            norm_fen == current_fen_unnormalized
+                            and len(current_fen_unnormalized.split()) != 6
+                        ):
+                            logger.warning(
+                                f"Skipping invalid FEN: {current_fen_unnormalized} in game {total_games}"
+                            )
+                            continue
 
-                        if starting_fen:
-                            starting_fen = normalize_fen(starting_fen)
-                            board = chess.Board(starting_fen, chess960=True)
-                            if not board.is_valid():
-                                continue
-                        else:
-                            board = game.board()
-                        last_seven_fens = deque(maxlen=7)
+                        # Only push the move once we've validated everything
+                        board.push(move)
 
-                        for node in game.mainline():
-                            move = node.move
-                            current_fen_unnormalized = board.fen()
+                        fen_parts = current_fen_unnormalized.split()
+                        active_color = fen_parts[1] if len(fen_parts) > 1 else "w"
+                        elo = white_elo if active_color == "w" else black_elo
+                        bot = white_bot if active_color == "w" else black_bot
+                        if elo >= min_elo_threshold and depth >= min_depth_threshold:
+                            entry = {
+                                "fen": norm_fen,
+                                "best_move": next_move_uci,
+                                "elo": elo,
+                                "history": list(last_seven_fens),
+                                "bot": bot,
+                                "depth": depth,
+                                "eval": eval_cp,
+                            }
+                            current_temp_batch.append(entry)
+                            positions_in_file_batch += 1
+                            input_positions_estimate += 1
 
-                            # Validate move BEFORE pushing
-                            if (
-                                move.uci() not in ["e1g1", "e1c1", "e8g8", "e8c8"]
-                                and move not in board.legal_moves
-                            ):
-                                print(starting_fen)
-                                logger.warning(
-                                    f"Illegal move {move.uci()} in position {board.fen()}"
+                        last_seven_fens.appendleft(norm_fen)
+
+                        if len(current_temp_batch) >= rows_per_temp_parquet_write:
+                            temp_file_path = (
+                                temp_dir_path / f"temp_{temp_file_index}.parquet"
+                            )
+                            written = write_batch_to_parquet(
+                                current_temp_batch, temp_file_path, ARROW_SCHEMA
+                            )
+                            if written > 0:
+                                logger.info(
+                                    f"Written temp batch to {temp_file_path.name} ({written} records)"
                                 )
-                                break  # or continue to skip just this move
+                                temp_file_index += 1
+                            total_written_to_temp += written
+                            current_temp_batch.clear()
 
-                            # Get move info before pushing
-                            next_move_uci = move.uci()
-                            comment = node.comment
-                            eval_cp, depth = None, None
-                            if comment:
-                                eval_cp, depth = extract_eval_and_depth(comment)
-
-                                if eval_cp is None or depth is None:
-                                    eval_cp = 0
-                                    depth = 0  # book move
-
-                                eval_cp = min(max(eval_cp, -9999), 9999)
-                            else:
-                                board.push(
-                                    move
-                                )  # Still need to advance even if we skip
-                                last_seven_fens.appendleft(
-                                    normalize_fen(current_fen_unnormalized)
-                                )
-                                continue
-
-                            norm_fen = normalize_fen(current_fen_unnormalized)
-                            if (
-                                norm_fen == current_fen_unnormalized
-                                and len(current_fen_unnormalized.split()) != 6
-                            ):
-                                logger.warning(
-                                    f"Skipping invalid FEN: {current_fen_unnormalized} in game {total_games}"
-                                )
-                                continue
-
-                            # Only push the move once we've validated everything
-                            board.push(move)
-
-                            fen_parts = current_fen_unnormalized.split()
-                            active_color = fen_parts[1] if len(fen_parts) > 1 else "w"
-                            elo = white_elo if active_color == "w" else black_elo
-                            bot = white_bot if active_color == "w" else black_bot
-                            if (
-                                elo >= min_elo_threshold
-                                and depth >= min_depth_threshold
-                            ):
-                                entry = {
-                                    "fen": norm_fen,
-                                    "best_move": next_move_uci,
-                                    "elo": elo,
-                                    "history": list(last_seven_fens),
-                                    "bot": bot,
-                                    "depth": depth,
-                                    "eval": eval_cp,
-                                }
-                                current_temp_batch.append(entry)
-                                positions_in_file_batch += 1
-                                input_positions_estimate += 1
-
-                            last_seven_fens.appendleft(norm_fen)
-
-                            if len(current_temp_batch) >= rows_per_temp_parquet_write:
-                                temp_file_path = (
-                                    temp_dir_path / f"temp_{temp_file_index}.parquet"
-                                )
-                                written = write_batch_to_parquet(
-                                    current_temp_batch, temp_file_path, ARROW_SCHEMA
-                                )
-                                if written > 0:
-                                    logger.info(
-                                        f"Written temp batch to {temp_file_path.name} ({written} records)"
-                                    )
-                                    temp_file_index += 1
-                                total_written_to_temp += written
-                                current_temp_batch.clear()
-
-                logger.info(
-                    f"Finished {pgn_path.name}. Games: {games_in_file}. Positions added: {positions_in_file_batch}."
-                )
-
-            if current_temp_batch:
-                temp_file_path = temp_dir_path / f"temp_{temp_file_index}.parquet"
-                written = write_batch_to_parquet(
-                    current_temp_batch, temp_file_path, ARROW_SCHEMA
-                )
-                if written > 0:
-                    logger.info(
-                        f"Written final temp batch to {temp_file_path.name} ({written} records)"
-                    )
-                total_written_to_temp += written
-                current_temp_batch.clear()
-
-            logger.info(f"TOTAL PGN GAMES PARSED: {total_games}")
             logger.info(
-                f"Total records written to temp Parquet files: {total_written_to_temp:,}"
+                f"Finished {pgn_path.name}. Games: {games_in_file}. Positions added: {positions_in_file_batch}."
             )
-            if total_written_to_temp != input_positions_estimate:
-                logger.warning(
-                    f"Mismatch: estimated positions ({input_positions_estimate:,}), "
-                    f"written ({total_written_to_temp:,})."
-                )
 
-        # parse lichess jsonl dataset
-        jsonl_files = list(Path(raw_dir).glob("*.jsonl"))
-        for jfile in jsonl_files:
-            logger.info(f"Parsing JSONL file: {jfile.name}")
-            parse_jsonl_into_parquet(
-                jsonl_path=jfile,
-                temp_dir_path=temp_dir_path,
-                schema=ARROW_SCHEMA,
-                rows_per_write=500_000,  # or whatever chunk size
+        if current_temp_batch:
+            temp_file_path = temp_dir_path / f"temp_{temp_file_index}.parquet"
+            written = write_batch_to_parquet(
+                current_temp_batch, temp_file_path, ARROW_SCHEMA
             )
-    else:
+            if written > 0:
+                logger.info(
+                    f"Written final temp batch to {temp_file_path.name} ({written} records)"
+                )
+            total_written_to_temp += written
+            current_temp_batch.clear()
+
+        logger.info(f"TOTAL PGN GAMES PARSED: {total_games}")
         logger.info(
-            f"Found {len(temp_files)} existing temp Parquet files, skipping PGN processing."
+            f"Total records written to temp Parquet files: {total_written_to_temp:,}"
         )
-        logger.info("Estimating input position count from existing temp files...")
-        input_count_sort_est = 0
-        for f in tqdm(temp_files, desc="Estimating size"):
-            try:
-                input_count_sort_est += pq.read_metadata(f).num_rows
-            except Exception as e:
-                logger.warning(f"Could not read metadata for {f.name}: {e}")
-        logger.info(f"Estimated input positions for sort: {input_count_sort_est:,}")
-        input_positions_estimate = input_count_sort_est
+        if total_written_to_temp != input_positions_estimate:
+            logger.warning(
+                f"Mismatch: estimated positions ({input_positions_estimate:,}), "
+                f"written ({total_written_to_temp:,})."
+            )
+
+    # parse lichess jsonl dataset
+    jsonl_files = list(Path(raw_dir).glob("*.jsonl"))
+    for jfile in jsonl_files:
+        logger.info(f"Parsing JSONL file: {jfile.name}")
+        parse_jsonl_into_parquet(
+            jsonl_path=jfile,
+            temp_dir_path=temp_dir_path,
+            schema=ARROW_SCHEMA,
+            rows_per_write=500_000,  # or whatever chunk size
+        )
+    # else:
+    #     logger.info(
+    #         f"Found {len(temp_files)} existing temp Parquet files, skipping PGN processing."
+    #     )
+    #     logger.info("Estimating input position count from existing temp files...")
+    #     input_count_sort_est = 0
+    #     for f in tqdm(temp_files, desc="Estimating size"):
+    #         try:
+    #             input_count_sort_est += pq.read_metadata(f).num_rows
+    #         except Exception as e:
+    #             logger.warning(f"Could not read metadata for {f.name}: {e}")
+    #     logger.info(f"Estimated input positions for sort: {input_count_sort_est:,}")
+    #     input_positions_estimate = input_count_sort_est
 
     # --- SECOND PASS: External Sort + Reduce ---
     temp_files = sorted(list(temp_dir_path.glob("temp_*.parquet")))
