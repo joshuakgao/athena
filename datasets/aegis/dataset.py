@@ -53,30 +53,25 @@ class AegisTrainDataset(Dataset):
         self.sample_dataset()
 
     def sample_dataset(self):
-        # Clear existing data
-        self.data = pd.DataFrame(columns=["fen", "history", "best_move"])
-        train_set_size = self.metadata["train_set_size"]
+        num_shards = len(self.shard_paths)
+        samples_guess = self.n // num_shards
 
-        # Don't divide by 0
-        assert train_set_size > 0
+        pieces = []
+        for shard_path in tqdm(self.shard_paths, desc=f"Sampling ~{self.n} rows"):
+            df = pd.read_parquet(
+                shard_path,
+                columns=[
+                    "fen",
+                    "history",
+                    "best_move",
+                    "eval",
+                ],
+            )
+            take = min(samples_guess, len(df), self.n)
+            sampled = df.sample(n=take)
+            pieces.append(sampled)
 
-        # Get percentage of dataset we want, based on self.n
-        sampling_rate = self.n / train_set_size
-
-        rows = []
-        for shard_path in tqdm(self.shard_paths, desc=f"Sampling ~{self.n} of Aegis"):
-            df = pd.read_parquet(shard_path)
-            for _, row in df.iterrows():
-                if random.random() < sampling_rate:
-                    rows.append(
-                        {
-                            "fen": row["fen"],
-                            "history": row["history"],
-                            "best_move": row["best_move"],
-                            "eval": row["eval"],
-                        }
-                    )
-        self.data = pd.DataFrame(rows)
+        self.data = pd.concat(pieces, ignore_index=True)
 
     def __len__(self):
         # len of dataset, not of entire dataset
