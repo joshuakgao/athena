@@ -142,7 +142,7 @@ for epoch in range(NUM_EPOCHS):
         if step % CHECK_METRICS_INT == 0:
             lr = scheduler.get_last_lr()[0]
             logger.info(
-                f"Ep {epoch+1:02d} | Iter {step:05d} | "
+                f"EPOCH {epoch+1} | Iter {step} | "
                 f"loss {loss:.4f} (policy {parts['policy']:.4f}, "
                 f"value {parts['value']:.4f}) | lr {lr:.2e}"
             )
@@ -161,7 +161,7 @@ for epoch in range(NUM_EPOCHS):
         if step % EVAL_MODEL_INT == 0:
             metrics = evaluate(model, test_loader)
             logger.info(
-                f"[EVAL] loss {metrics['eval_loss']:.4f} | "
+                f"[EVAL] eval_loss {metrics['eval_loss']:.4f} | "
                 f"eval_value_loss {metrics['eval_value_loss']:.4f} | "
                 f"from_acc {metrics['eval_acc_from']:.3%} | "
                 f"to_acc {metrics['eval_acc_to']:.3%} | "
