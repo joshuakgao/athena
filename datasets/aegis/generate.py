@@ -163,7 +163,9 @@ def extract_eval_and_depth(comment):
     return None, None
 
 
-def parse_jsonl_into_parquet(jsonl_path, temp_dir_path, schema, rows_per_write=500_000):
+def parse_jsonl_into_parquet(
+    jsonl_path, temp_dir_path, schema, rows_per_write=1_000_000
+):
     """
     Reads each line of a JSONL file, e.g.:
       {
@@ -197,7 +199,17 @@ def parse_jsonl_into_parquet(jsonl_path, temp_dir_path, schema, rows_per_write=5
     file_index = 0
 
     with open(jsonl_path, "r", encoding="utf-8") as f:
-        for line_num, line in enumerate(f, start=1):
+        # get number of lines in jsonl file
+        logger.info("Getting number of lines in jsonl file.")
+        count = 0
+        for line in f:
+            count += 1
+
+    with open(jsonl_path, "r", encoding="utf-8") as f:
+        logger.info(f"Process {jsonl_path.name} file of length {count}.")
+        for line_num, line in tqdm(
+            enumerate(f, start=1), total=count, desc=f"Processing {jsonl_path.name}"
+        ):
             line = line.strip()
             if not line:
                 continue  # skip empty lines
