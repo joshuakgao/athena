@@ -163,16 +163,16 @@ for epoch in range(NUM_EPOCHS):
             logger.info(
                 f"[EVAL] loss {metrics['eval_loss']:.4f} | "
                 f"eval_value_loss {metrics['eval_value_loss']:.4f} | "
-                f"from_acc {metrics['from_acc']:.3%} | "
-                f"to_acc {metrics['to_acc']:.3%} | "
-                f"overall {metrics['eval_overall_acc']:.3%}"
+                f"from_acc {metrics['eval_acc_from']:.3%} | "
+                f"to_acc {metrics['eval_acc_to']:.3%} | "
+                f"overall {metrics['eval_acc_overall']:.3%}"
             )
 
             if USE_WANDB:
                 wandb.log({f"{k}": v for k, v in metrics.items()})
 
-            if metrics["eval_overall_acc"] > best_acc:
-                best_acc = metrics["eval_overall_acc"]
+            if metrics["eval_acc_overall"] > best_acc:
+                best_acc = metrics["eval_acc_overall"]
                 os.makedirs("checkpoints", exist_ok=True)
                 torch.save(
                     model.state_dict(), f"checkpoints/best_model_{MODEL_NAME}.pt"
