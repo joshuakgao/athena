@@ -5,7 +5,7 @@
     "lr": 0.003,
     "lr_decay_rate": 0.95,
     "batch_size": 256,
-    "use_wandb": false,
+    "use_wandb": true,
     "num_res_blocks": 19,
-    "train_samples_per_epoch": 100000
+    "train_samples_per_epoch": 10000000
 }

@@ -40,7 +40,7 @@ train_loader = DataLoader(aegis.train_dataset, batch_size=BATCH_SIZE, shuffle=Tr
 test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 
 # ─────────────────────────── MODEL ────────────────────────────
-model = Athena(input_channels=62, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+model = Athena(input_channels=59, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(
     optimizer, step_size=iters_in_epoch, gamma=LR_DECAY_RATE
@@ -86,10 +86,10 @@ def loss_function(policy_pred, value_pred, policy_tgt, value_tgt):
 # ─────────────────────────── EVAL ─────────────────────────────
 def evaluate(model, loader):
     model.eval()
-    total_loss = total_from = total_to = total = 0
+    total_loss = total_from = total_to = total = total_v_mse = 0
 
     with torch.no_grad():
-        for X, P_tgt, V_tgt, fens, best_moves in loader:
+        for X, P_tgt, V_tgt in loader:
             X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
             P_pred, V_pred = model(X)
 
@@ -115,9 +115,9 @@ def evaluate(model, loader):
     return {
         "eval_loss": total_loss / total,
         "eval_value_loss": total_v_mse / total,
-        "from_acc": total_from / total,
-        "to_acc": total_to / total,
-        "eval_overall_acc": (total_from + total_to) / (2 * total),
+        "eval_acc_from": total_from / total,
+        "eval_acc_to": total_to / total,
+        "eval_acc_overall": (total_from + total_to) / (2 * total),
     }
 
 
@@ -143,8 +143,8 @@ for epoch in range(NUM_EPOCHS):
             lr = scheduler.get_last_lr()[0]
             logger.info(
                 f"Ep {epoch+1:02d} | Iter {step:05d} | "
-                f"loss {loss:.4f} (pol {parts['policy']:.4f}, "
-                f"val {parts['value']:.4f}) | lr {lr:.2e}"
+                f"loss {loss:.4f} (policy {parts['policy']:.4f}, "
+                f"value {parts['value']:.4f}) | lr {lr:.2e}"
             )
             if USE_WANDB:
                 wandb.log(
@@ -153,7 +153,7 @@ for epoch in range(NUM_EPOCHS):
                         "train_loss_policy": parts["policy"].item(),
                         "train_loss_from": parts["from"].item(),
                         "train_loss_value": parts["value"].item(),
-                        "lr": lr,
+                        "learning_rate": lr,
                     }
                 )
 
@@ -161,17 +161,18 @@ for epoch in range(NUM_EPOCHS):
         if step % EVAL_MODEL_INT == 0:
             metrics = evaluate(model, test_loader)
             logger.info(
-                f"[EVAL] loss {metrics['loss']:.4f} | "
+                f"[EVAL] loss {metrics['eval_loss']:.4f} | "
+                f"eval_value_loss {metrics['eval_value_loss']:.4f} | "
                 f"from_acc {metrics['from_acc']:.3%} | "
                 f"to_acc {metrics['to_acc']:.3%} | "
-                f"overall {metrics['overall_acc']:.3%}"
+                f"overall {metrics['eval_overall_acc']:.3%}"
             )
 
             if USE_WANDB:
-                wandb.log({f"eval_{k}": v for k, v in metrics.items()})
+                wandb.log({f"{k}": v for k, v in metrics.items()})
 
-            if metrics["overall_acc"] > best_acc:
-                best_acc = metrics["overall_acc"]
+            if metrics["eval_overall_acc"] > best_acc:
+                best_acc = metrics["eval_overall_acc"]
                 os.makedirs("checkpoints", exist_ok=True)
                 torch.save(
                     model.state_dict(), f"checkpoints/best_model_{MODEL_NAME}.pt"

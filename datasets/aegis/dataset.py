@@ -135,7 +135,7 @@ class AegisTestDataset(Dataset):
         x = _encode_position([fen], [history])
         y = _encode_move([best_move])
         v = _encode_centipawn([centipawn])
-        return x[0], y[0], v[0], fen, best_move, centipawn
+        return x[0], y[0], v[0]
 
 
 def _encode_position(fens, histories):

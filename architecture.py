@@ -26,7 +26,7 @@ class ResidualBlock(nn.Module):
 
 
 class Athena(nn.Module):
-    def __init__(self, input_channels=62, num_res_blocks=19, device="auto"):
+    def __init__(self, input_channels=59, num_res_blocks=19, device="auto"):
         super(Athena, self).__init__()
         self.device = device_selector(device, label="Athena")
 
