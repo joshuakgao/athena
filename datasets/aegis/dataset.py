@@ -133,16 +133,15 @@ class AegisTestDataset(Dataset):
 
 def _encode_input(fens, histories):
     """
-    Encode a batch of FEN strings into a batch of input tensors with shape (batch_size, 69, 8, 8).
-    8 layers for each piece type (pawn, knight, bishop, rook, queen, king),
-    1 layer for castling rights, 1 layer for en passant square,
+    Encode a batch of FEN strings into a batch of input tensors with shape (batch_size, 59, 8, 8).
+    6 layers for each piece type (pawn, knight, bishop, rook, queen, king), 1 layer for castling rights
     8 fens are then encoded in this manner (1 current + 7 history),
-    1 layer for repetition count, 1 layer for halfmove clock,
-    1 layer for fullmove number, and 1 layer for turn.
-    The last layer is a constant 1s tensor to indicate the board area to reduce the effect of edge blurring in the convlutional layers.
+    1 layer for repetition count
+    1 layer is a constant 1s tensor to indicate the board area to reduce the effect of edge blurring in the convlutional layers.
+    1 layer is for who's turn it is
     """
     batch_size = len(fens)
-    inputs = np.zeros((batch_size, 62, 8, 8), dtype=np.float32)
+    inputs = np.zeros((batch_size, 59, 8, 8), dtype=np.float32)
 
     types = ["p", "n", "b", "r", "q", "k"]
     for i, (fen, history) in enumerate(zip(fens, histories)):
@@ -185,19 +184,6 @@ def _encode_input(fens, histories):
             inputs[i, layer_idx, :, :] = castling_tensor
             layer_idx += 1
 
-        # Encode en passant square
-        ep_square = board.ep_square
-        if ep_square is not None:
-            ep_row, ep_col = chess.square_rank(ep_square), chess.square_file(ep_square)
-            turn = board.turn
-            if turn == chess.WHITE:
-                inputs[i, layer_idx, ep_row, ep_col] = 1
-            else:
-                inputs[i, layer_idx, ep_row, ep_col] = -1
-        else:
-            inputs[i, layer_idx, :, :] = np.zeros((8, 8), dtype=np.float32)
-        layer_idx += 1
-
         # Encode repetition
         repetition_count = 0
         if board.is_repetition(count=1):
@@ -215,16 +201,6 @@ def _encode_input(fens, histories):
         elif board.is_repetition(count=7):
             repetition_count = 7
         inputs[i, layer_idx, :, :] = np.full((8, 8), repetition_count, dtype=np.float32)
-        layer_idx += 1
-
-        # Encode number of halfmoves with no capture or pawn move
-        halfmove_count = board.halfmove_clock
-        inputs[i, layer_idx, :, :] = np.full((8, 8), halfmove_count, dtype=np.float32)
-        layer_idx += 1
-
-        # Encode number of fullmoves
-        fullmove_count = board.fullmove_number
-        inputs[i, layer_idx, :, :] = np.full((8, 8), fullmove_count, dtype=np.float32)
         layer_idx += 1
 
         # Encode turn
