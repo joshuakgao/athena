@@ -27,6 +27,9 @@ class AegisDataset:
     def encode_move(self, ucis):
         return _encode_move(ucis)
 
+    def encode_eval(self, evals):
+        return _encode_eval(evals)
+
     def decode_move_policy(self, fens, policies):
         return _decode_move_policy(fens, policies)
 
@@ -43,7 +46,7 @@ class AegisTrainDataset(Dataset):
             p for p in self.dir.glob("*.parquet") if p.name != "test.parquet"
         ]
         self.metadata_path = self.dir / "metadata.json"
-        self.data = pd.DataFrame(columns=["fen", "history", "best_move"])
+        self.data = pd.DataFrame(columns=["fen", "history", "best_move", "eval"])
         self.n = n
 
         # Load metadata
@@ -53,23 +56,22 @@ class AegisTrainDataset(Dataset):
         self.sample_dataset()
 
     def sample_dataset(self):
+        # Clear existing data
+        self.data = pd.DataFrame(columns=["fen", "history", "best_move", "eval"])
         num_shards = len(self.shard_paths)
-        samples_guess = self.n // num_shards
+        samples_per_shard = self.n // num_shards
 
         pieces = []
-        for shard_path in tqdm(self.shard_paths, desc=f"Sampling ~{self.n} rows"):
+        for shard_path in tqdm(self.shard_paths, desc=f"Sampling ~{self.n} of Aegis"):
             df = pd.read_parquet(
-                shard_path,
-                columns=[
-                    "fen",
-                    "history",
-                    "best_move",
-                    "eval",
-                ],
+                shard_path, columns=["fen", "history", "best_move", "eval"]
             )
-            take = min(samples_guess, len(df), self.n)
-            sampled = df.sample(n=take)
-            pieces.append(sampled)
+            num_rows = df.shape[0]
+            random_indexes = random.sample(
+                range(num_rows), min(samples_per_shard, num_rows)
+            )
+            sampled_df = df.iloc[random_indexes]
+            pieces.append(sampled_df)
 
         self.data = pd.concat(pieces, ignore_index=True)
 
@@ -85,7 +87,7 @@ class AegisTrainDataset(Dataset):
         centipawn = row["eval"]
         x = _encode_position([fen], [history])
         y = _encode_move([best_move])
-        v = _encode_centipawn([centipawn])
+        v = _encode_eval([centipawn])
         return x[0], y[0], v[0]
 
 
@@ -129,7 +131,7 @@ class AegisTestDataset(Dataset):
         centipawn = row["eval"]
         x = _encode_position([fen], [history])
         y = _encode_move([best_move])
-        v = _encode_centipawn([centipawn])
+        v = _encode_eval([centipawn])
         return x[0], y[0], v[0]
 
 
@@ -220,7 +222,7 @@ def _encode_position(fens, histories):
     return torch.tensor(inputs)
 
 
-def _encode_centipawn(evals):
+def _encode_eval(evals):
     centipawn_evals = np.tanh(np.array(evals, dtype=np.float32))
     return torch.tensor(centipawn_evals).unsqueeze(1)
 

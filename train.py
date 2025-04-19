@@ -1,14 +1,18 @@
-import json, os, sys
-import torch, torch.nn.functional as F
+import json
+import os
+import sys
+
+import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-import wandb
 
+import wandb
 from architecture import Athena
 from datasets.aegis.dataset import AegisDataset
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
-from utils.logger import logger  # your own logging helper
+from utils.logger import logger
 
 # ─────────────────────────── CONFIG ───────────────────────────
 with open("train_config.json", "r") as f:
@@ -25,9 +29,9 @@ TRAIN_SAMPLES_PER_EPOCH = cfg.get("train_samples_per_epoch", 10_000_000)
 
 # ─────────────────────────── DATA ─────────────────────────────
 aegis = AegisDataset(train_n=TRAIN_SAMPLES_PER_EPOCH)  # yields 5 items
-iters_in_epoch = max(len(aegis.train_dataset) // BATCH_SIZE, 1)
-CHECK_METRICS_INT = max(iters_in_epoch // 100, 1)
-EVAL_MODEL_INT = max(iters_in_epoch // 10, 1)
+iters_per_epoch = max(len(aegis.train_dataset) // BATCH_SIZE, 1)
+CHECK_METRICS_INT = max(iters_per_epoch // 100, 1)
+EVAL_MODEL_INT = max(iters_per_epoch // 10, 1)
 
 logger.info(
     f"Train size: {len(aegis.train_dataset)}, " f"Test size: {len(aegis.test_dataset)}"
@@ -43,7 +47,7 @@ test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 model = Athena(input_channels=59, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(
-    optimizer, step_size=iters_in_epoch, gamma=LR_DECAY_RATE
+    optimizer, step_size=iters_per_epoch, gamma=LR_DECAY_RATE
 )
 
 # optional experiment tracker
@@ -66,7 +70,6 @@ def loss_function(policy_pred, value_pred, policy_tgt, value_tgt):
 
     loss_from = F.cross_entropy(from_logits, from_idx)
     loss_to = F.cross_entropy(to_logits, to_idx)
-    loss_policy = 0.5 * (loss_from + loss_to)
 
     # ---------- value sub‑loss ----------
     value_pred = value_pred.squeeze(1)  # [B]
@@ -74,9 +77,8 @@ def loss_function(policy_pred, value_pred, policy_tgt, value_tgt):
     loss_value = F.mse_loss(value_pred, value_tgt)
 
     # combine (equal weights)
-    loss = loss_policy + loss_value
+    loss = (loss_from + loss_to + loss_value) / 3
     return loss, {
-        "policy": loss_policy.detach(),
         "from": loss_from.detach(),
         "to": loss_to.detach(),
         "value": loss_value.detach(),
@@ -115,9 +117,9 @@ def evaluate(model, loader):
     return {
         "eval_loss": total_loss / total,
         "eval_value_loss": total_v_mse / total,
-        "eval_acc_from": total_from / total,
-        "eval_acc_to": total_to / total,
-        "eval_acc_overall": (total_from + total_to) / (2 * total),
+        "eval_from_accuracy": total_from / total,
+        "eval_to_accuracy": total_to / total,
+        "eval_overall_accuracy": (total_from + total_to) / (2 * total),
     }
 
 
@@ -136,22 +138,19 @@ for epoch in range(NUM_EPOCHS):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        scheduler.step()
 
         # ----- quick logs -----
         if step % CHECK_METRICS_INT == 0:
             lr = scheduler.get_last_lr()[0]
             logger.info(
-                f"EPOCH {epoch+1} | Iter {step} | "
-                f"loss {loss:.4f} (policy {parts['policy']:.4f}, "
-                f"value {parts['value']:.4f}) | lr {lr:.2e}"
+                f"{epoch+1}: {step}/{iters_per_epoch}    loss: {loss:.4f}    from_loss: {parts['from']:.4f}    to_loss: {parts['to']:.4f}    value_loss: {parts['value']:.4f}    lr: {lr:.2e}"
             )
             if USE_WANDB:
                 wandb.log(
                     {
                         "train_loss": loss.item(),
-                        "train_loss_policy": parts["policy"].item(),
                         "train_loss_from": parts["from"].item(),
+                        "train_loss_to": parts["to"].item(),
                         "train_loss_value": parts["value"].item(),
                         "learning_rate": lr,
                     }
@@ -161,18 +160,14 @@ for epoch in range(NUM_EPOCHS):
         if step % EVAL_MODEL_INT == 0:
             metrics = evaluate(model, test_loader)
             logger.info(
-                f"[EVAL] eval_loss {metrics['eval_loss']:.4f} | "
-                f"eval_value_loss {metrics['eval_value_loss']:.4f} | "
-                f"from_acc {metrics['eval_acc_from']:.3%} | "
-                f"to_acc {metrics['eval_acc_to']:.3%} | "
-                f"overall {metrics['eval_acc_overall']:.3%}"
+                f"eval_loss: {metrics['eval_loss']:.4f}    eval_value_loss: {metrics['eval_value_loss']:.4f}    from_acc: {metrics['eval_from_accuracy']:.3%}    to_acc: {metrics['eval_to_accuracy']:.3%}    ACCURACY:{metrics['eval_overall_accuracy']:.3%}"
             )
 
             if USE_WANDB:
                 wandb.log({f"{k}": v for k, v in metrics.items()})
 
-            if metrics["eval_acc_overall"] > best_acc:
-                best_acc = metrics["eval_acc_overall"]
+            if metrics["eval_overall_accuracy"] > best_acc:
+                best_acc = metrics["eval_overall_accuracy"]
                 os.makedirs("checkpoints", exist_ok=True)
                 torch.save(
                     model.state_dict(), f"checkpoints/best_model_{MODEL_NAME}.pt"
@@ -181,7 +176,9 @@ for epoch in range(NUM_EPOCHS):
 
     # end‑epoch housekeeping
     aegis.train_dataset.sample_dataset()  # fresh sample for next epoch
+    scheduler.step()
     logger.info(f"End of epoch {epoch+1} – lr is now {scheduler.get_last_lr()[0]:.2e}")
+
 
 if USE_WANDB:
     wandb.finish()
