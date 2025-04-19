@@ -1,6 +1,6 @@
 #!/bin/bash
-#SBATCH -J athena
-#SBATCH -o athena.o%j
+#SBATCH -J bash
+#SBATCH -o bash.o%j
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=256GB
 #SBATCH --gpus=1
