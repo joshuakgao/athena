@@ -1,11 +1,11 @@
 {
-    "model_name": "1.12_resnet19",
-    "description": "Way more data.",
+    "model_name": "1.14_resnet19",
+    "description": "Double lr. Fixed lr decay.",
     "num_epochs": 100,
-    "lr": 0.0003,
+    "lr": 0.00006,
     "lr_decay_rate": 0.95,
     "batch_size": 256,
-    "use_wandb": true,
+    "use_wandb": false,
     "num_res_blocks": 19,
     "train_samples_per_epoch": 10000000
 }

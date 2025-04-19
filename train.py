@@ -5,10 +5,9 @@ import sys
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader
-from tqdm import tqdm
 
 import wandb
-from architecture import Athena
+from architecture import Athena, AthenaV2
 from datasets.aegis.dataset import AegisDataset
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
@@ -44,11 +43,9 @@ train_loader = DataLoader(aegis.train_dataset, batch_size=BATCH_SIZE, shuffle=Tr
 test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 
 # ─────────────────────────── MODEL ────────────────────────────
-model = Athena(input_channels=59, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+model = AthenaV2(input_channels=59, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
-scheduler = torch.optim.lr_scheduler.StepLR(
-    optimizer, step_size=iters_per_epoch, gamma=LR_DECAY_RATE
-)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=LR_DECAY_RATE)
 
 # optional experiment tracker
 if USE_WANDB:

@@ -78,3 +78,68 @@ class Athena(nn.Module):
 
         # Return both policy logits and the value prediction
         return policy_logits, value_output
+
+
+class SE(nn.Module):
+    def __init__(self, c, r=8):
+        super().__init__()
+        self.fc1, self.fc2 = nn.Linear(c, c // r), nn.Linear(c // r, c)
+
+    def forward(self, x):
+        b, c, _, _ = x.size()
+        s = F.adaptive_avg_pool2d(x, 1).view(b, c)
+        s = torch.sigmoid(self.fc2(F.relu(self.fc1(s)))).view(b, c, 1, 1)
+        return x * s
+
+
+class Block(nn.Module):
+    def __init__(self, c, p_survive=1.0, norm=nn.BatchNorm2d):
+        super().__init__()
+        self.b1, self.c1 = norm(c), nn.Conv2d(c, c, 3, 1, 1, bias=False)
+        self.b2, self.c2 = norm(c), nn.Conv2d(c, c, 3, 1, 1, bias=False)
+        self.se = SE(c)
+        self.drop = nn.Dropout2d(1 - p_survive) if p_survive < 1 else nn.Identity()
+
+    def forward(self, x):
+        y = self.c1(F.relu(self.b1(x)))
+        y = self.c2(F.relu(self.b2(y)))
+        y = self.se(y)
+        y = self.drop(y)
+        return x + y
+
+
+class AthenaV2(nn.Module):
+    def __init__(self, input_channels=59, width=256, num_res_blocks=30, device="auto"):
+        super().__init__()
+        self.device = device_selector(device, label="AthenaV2")
+        Norm = nn.GroupNorm if num_res_blocks > 25 else nn.BatchNorm2d
+        self.stem = nn.Sequential(
+            nn.Conv2d(input_channels, width, 3, 1, 1, bias=False),
+            Norm(width),
+            nn.ReLU(inplace=True),
+        )
+        self.body = nn.Sequential(
+            *[
+                Block(width, p_survive=1 - 0.5 * i / num_res_blocks, norm=Norm)
+                for i in range(num_res_blocks)
+            ]
+        )
+
+        # policy head
+        self.pol_conv = nn.Conv2d(width, 2, 1)  # direct logits
+
+        # value head
+        self.val_conv = nn.Conv2d(width, 1, 1)
+        self.val_norm = Norm(1)
+        self.val_fc = nn.Linear(1, 1)
+
+    def forward(self, x):
+        x = self.body(self.stem(x))
+
+        p = self.pol_conv(x)  # [B,2,8,8]
+
+        v = F.relu(self.val_norm(self.val_conv(x)))
+        v = F.adaptive_avg_pool2d(v, 1).view(x.size(0), 1)
+        v = torch.tanh(self.val_fc(v))  # [B,1]
+
+        return p, v
