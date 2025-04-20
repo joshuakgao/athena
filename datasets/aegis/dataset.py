@@ -156,7 +156,8 @@ def _encode_position(fens, histories):
         board = chess.Board(fen)
         layer_idx = 0
 
-        history.insert(0, fen)
+        # history.insert(0, fen)
+        history = [fen]
         for _fen in history:
             _board = chess.Board(_fen)
             if _fen == None:
@@ -256,11 +257,7 @@ def _decode_move(policies, fens):
             return None
 
         # Check policy tensor shape
-        assert policy.shape == (
-            2,
-            8,
-            8,
-        ), f"Policy shape needs to be (2, 8, 8). Provided policy shape of {policy.shape}"
+        assert policy.shape == (2, 8, 8)
 
         # Flatten the policy layers
         policy_from_flat = policy[0].flatten()

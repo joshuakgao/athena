@@ -92,23 +92,31 @@ def evaluate(model):
     total_loss = total_from = total_to = total = total_v_mse = 0
 
     with torch.no_grad():
-        for X, P_tgt, V_tgt, fen in test_loader:
+        for X, P_tgt, V_tgt, fens in test_loader:
             X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
             P_pred, V_pred = model(X)
 
             loss, _ = loss_function(P_pred, V_pred, P_tgt, V_tgt)
             bs = X.size(0)
             total_loss += loss.item() * bs
-            pred_moves = aegis.decode_move(P_pred, fen)
-            target_moves = aegis.decode_move(P_tgt, fen)
+            pred_moves = aegis.decode_move(P_pred, fens)
+            target_moves = aegis.decode_move(P_tgt, fens)
 
-            for pred_move, target_move in zip(pred_moves, target_moves):
+            for i, (pred_move, target_move, fen) in enumerate(
+                zip(pred_moves, target_moves, fens)
+            ):
                 pred_move = str(pred_move)
                 target_move = str(target_move)
                 pred_from = pred_move[:2]
                 target_from = target_move[:2]
                 pred_to = pred_move[2:4]
                 target_to = target_move[2:4]
+
+                if i < 20:
+                    if pred_move == target_move:
+                        print(f"{fen} {pred_move} ✅")
+                    else:
+                        print(f"{fen} {pred_move} {target_move} ❌")
 
                 total_from += pred_from == target_from
                 total_to += pred_to == target_to

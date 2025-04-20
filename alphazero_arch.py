@@ -119,7 +119,7 @@ class AlphaZeroNet(nn.Module):
         )
 
         # initialise weights
-        self._init_weights()
+        # self._init_weights()
 
     # ---------------------------------------------------------------------
 
