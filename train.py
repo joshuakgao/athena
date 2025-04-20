@@ -71,6 +71,7 @@ def loss_function(policy_pred, value_pred, policy_tgt, value_tgt):
 
     loss_from = F.cross_entropy(from_logits, from_idx)
     loss_to = F.cross_entropy(to_logits, to_idx)
+    loss_policy = (loss_from + loss_to) / 2
 
     # ---------- value sub‑loss ----------
     value_pred = value_pred.squeeze(1)  # [B]
@@ -78,7 +79,7 @@ def loss_function(policy_pred, value_pred, policy_tgt, value_tgt):
     loss_value = F.mse_loss(value_pred, value_tgt)
 
     # combine (equal weights)
-    loss = (loss_from + loss_to + loss_value) / 3
+    loss = loss_policy + loss_value
     return loss, {
         "from": loss_from.detach(),
         "to": loss_to.detach(),
