@@ -92,7 +92,7 @@ def evaluate(model):
     total_loss = total_from = total_to = total = total_v_mse = 0
 
     with torch.no_grad():
-        for X, P_tgt, V_tgt, fens in test_loader:
+        for X, P_tgt, V_tgt, fens, bots, depths, elos, evals in test_loader:
             X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
             P_pred, V_pred = model(X)
 
@@ -102,8 +102,28 @@ def evaluate(model):
             pred_moves = aegis.decode_move(P_pred, fens)
             target_moves = aegis.decode_move(P_tgt, fens)
 
-            for i, (pred_move, target_move, fen) in enumerate(
-                zip(pred_moves, target_moves, fens)
+            for i, (
+                pred_move,
+                target_move,
+                eval_pred,
+                eval_tgt,
+                fen,
+                bot,
+                elo,
+                depth,
+                eval,
+            ) in enumerate(
+                zip(
+                    pred_moves,
+                    target_moves,
+                    V_pred,
+                    V_tgt,
+                    fens,
+                    bots,
+                    elos,
+                    depths,
+                    evals,
+                )
             ):
                 pred_move = str(pred_move)
                 target_move = str(target_move)
@@ -112,11 +132,17 @@ def evaluate(model):
                 pred_to = pred_move[2:4]
                 target_to = target_move[2:4]
 
-                if i < 20:
-                    if pred_move == target_move:
-                        print(f"{fen} {pred_move} ✅")
-                    else:
-                        print(f"{fen} {pred_move} {target_move} ❌")
+                pred_eval = aegis.decode_eval([eval_pred])[0]
+                target_eval = aegis.decode_eval([eval_tgt])[0]
+
+                if pred_move == target_move:
+                    print(
+                        f"{fen} {pred_move} {pred_eval:.2f} {target_eval:.2f} ✅ {bot} {elo} {depth}"
+                    )
+                else:
+                    print(
+                        f"{fen} {pred_move} {target_move} {pred_eval:.2f} {target_eval:.2f} ❌ {bot} {elo} {depth}"
+                    )
 
                 total_from += pred_from == target_from
                 total_to += pred_to == target_to

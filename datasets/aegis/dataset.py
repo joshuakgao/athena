@@ -33,6 +33,9 @@ class AegisDataset:
     def decode_move(self, fens, policies):
         return _decode_move(fens, policies)
 
+    def decode_eval(self, encoded_evals):
+        return _decode_eval(encoded_evals)
+
 
 class AegisTrainDataset(Dataset):
     def __init__(self, dir="datasets/aegis/data", n=10_000_000):
@@ -44,7 +47,7 @@ class AegisTrainDataset(Dataset):
         # Get all shards except test.parquet
         self.shard_paths = [
             p for p in self.dir.glob("*.parquet") if p.name != "test.parquet"
-        ]
+        ][:1]
         self.metadata_path = self.dir / "metadata.json"
         self.data = pd.DataFrame(columns=["fen", "history", "best_move", "eval"])
         self.n = n
@@ -100,7 +103,9 @@ class AegisTestDataset(Dataset):
         self.dir = Path(dir)
         self.test_path = self.dir / "test.parquet"
         self.metadata_path = self.dir / "metadata.json"
-        self.data = pd.DataFrame(columns=["fen", "history", "best_move"])
+        self.data = pd.DataFrame(
+            columns=["fen", "history", "best_move", "elo", "bot", "depth"]
+        )
 
         # Load metadata
         with open(self.metadata_path, "r") as f:
@@ -116,6 +121,9 @@ class AegisTestDataset(Dataset):
                     "history": row["history"],
                     "best_move": row["best_move"],
                     "eval": row["eval"],
+                    "bot": row["bot"],
+                    "depth": row["depth"],
+                    "elo": row["elo"],
                 }
             )
         self.data = pd.DataFrame(rows)
@@ -129,10 +137,15 @@ class AegisTestDataset(Dataset):
         history = list(row["history"])
         best_move = row["best_move"]
         centipawn = row["eval"]
+        bot = row["bot"]
+        depth = row["depth"]
+        elo = row["elo"]
+        eval = row["eval"]
+
         x = _encode_position([fen], [history])
         y = _encode_move([best_move])
         v = _encode_eval([centipawn])
-        return x[0], y[0], v[0], fen
+        return x[0], y[0], v[0], fen, bot, depth, elo, eval
 
 
 def _encode_position(fens, histories):
@@ -223,9 +236,14 @@ def _encode_position(fens, histories):
     return torch.tensor(inputs)
 
 
-def _encode_eval(evals):
-    centipawn_evals = np.tanh(np.array(evals, dtype=np.float32))
-    return torch.tensor(centipawn_evals).unsqueeze(1)
+def _encode_eval(evals, scale=400):
+    """
+    Scales and applies tanh to centipawn evaluations.
+    Maps typical range [-1000, 1000] into ~[-0.999, 0.999]
+    """
+    scaled = np.array(evals, dtype=np.float64) / scale
+    squashed = np.tanh(scaled)
+    return torch.tensor(squashed, dtype=torch.float32).unsqueeze(1)
 
 
 def _encode_move(ucis):
@@ -279,3 +297,14 @@ def _decode_move(policies, fens):
         best_move = legal_moves[np.argmax(move_scores)]
         best_moves.append(best_move)
     return best_moves
+
+
+def _decode_eval(encoded_evals, scale=400):
+    """
+    Inverts tanh and rescales the values to recover centipawn evaluations.
+    """
+    if not isinstance(encoded_evals, torch.Tensor):
+        encoded_evals = torch.tensor(encoded_evals)
+    encoded_evals = encoded_evals.detach().cpu().numpy()
+    recovered = np.arctanh(encoded_evals)
+    return (recovered * scale).tolist()
