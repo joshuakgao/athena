@@ -11,6 +11,7 @@ from lichessbot.lib.engine_wrapper import MinimalEngine
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
 from architecture import Athena
+from alphazero_arch import AlphaZeroNet
 
 
 def encode_input(fens):
@@ -83,53 +84,56 @@ def encode_input(fens):
     return torch.tensor(inputs)
 
 
-def decode_output(policy, fen):
+def decode_move(policies, fens):
     """Decode policy output tensor (shape [2, 8, 8]) to a single UCI move."""
-    board = chess.Board(fen)
-    legal_moves = list(board.legal_moves)
-    if not legal_moves:
-        return None
+    best_moves = []
+    for policy, fen in zip(policies, fens):
+        board = chess.Board(fen)
+        legal_moves = list(board.legal_moves)
+        if not legal_moves:
+            return None
 
-    # Check policy tensor shape
-    assert policy.shape == (2, 8, 8)
+        # Check policy tensor shape
+        assert policy.shape == (2, 8, 8)
 
-    # Flatten the policy layers
-    policy_from_flat = policy[0, 0].flatten()
-    policy_to_flat = policy[0, 1].flatten()
+        # Flatten the policy layers
+        policy_from_flat = policy[0].flatten()
+        policy_to_flat = policy[1].flatten()
 
-    # Apply softmax to the flattened policy layers
-    policy_from = torch.softmax(policy_from_flat, dim=-1).reshape(8, 8)
-    policy_to = torch.softmax(policy_to_flat, dim=-1).reshape(8, 8)
+        # Apply softmax to the flattened policy layers
+        policy_from = torch.softmax(policy_from_flat, dim=-1).reshape(8, 8)
+        policy_to = torch.softmax(policy_to_flat, dim=-1).reshape(8, 8)
 
-    # Score each legal move
-    move_scores = []
-    for move in legal_moves:
-        from_sq = (7 - (move.from_square // 8), move.from_square % 8)
-        to_sq = (7 - (move.to_square // 8), move.to_square % 8)
-        score = policy_from[from_sq[0], from_sq[1]] * policy_to[to_sq[0], to_sq[1]]
-        move_scores.append(score.item())
+        # Score each legal move
+        move_scores = []
+        for move in legal_moves:
+            from_sq = (7 - (move.from_square // 8), move.from_square % 8)
+            to_sq = (7 - (move.to_square // 8), move.to_square % 8)
+            score = policy_from[from_sq[0], from_sq[1]] * policy_to[to_sq[0], to_sq[1]]
+            move_scores.append(score.item())
 
-    # Select move with highest score
-    best_move = legal_moves[np.argmax(move_scores)]
-    return best_move
+        # Select move with highest score
+        best_move = legal_moves[np.argmax(move_scores)]
+        best_moves.append(best_move)
+    return best_moves
 
 
 class AthenaEngine(MinimalEngine):
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         model_path = "checkpoints/best_model_1.11_resnet19.pt"
+        # self.model = AlphaZeroNet(device="cpu")
         self.model = Athena(device="cpu")
         self.model.load_state_dict(torch.load(model_path, map_location="cpu"))
         self.model.eval()
-        self.temperature = 0.8
-        self.min_temp = 0.3
+        self.temperature = 0.1
 
     def search(self, board: chess.Board, time_limit: Limit = None, *args):
         input_tensor = encode_input([board.fen()]).to(self.model.device)
         with torch.no_grad():
             policy = self.model(input_tensor)
 
-        best_move = decode_output(policy[0], board.fen())
+        best_move = decode_move(policy[0], board.fen())
         return PlayResult(best_move, None)
 
 

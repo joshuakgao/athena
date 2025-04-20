@@ -8,6 +8,7 @@ from torch.utils.data import DataLoader
 
 import wandb
 from architecture import Athena, AthenaV2
+from alphazero_arch import AlphaZeroNet
 from datasets.aegis.dataset import AegisDataset
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
@@ -39,11 +40,14 @@ logger.info(
     f"Metrics every {CHECK_METRICS_INT} iters, " f"Eval every {EVAL_MODEL_INT} iters"
 )
 
-train_loader = DataLoader(aegis.train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+train_loader = DataLoader(
+    aegis.train_dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True
+)
 test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 
 # ─────────────────────────── MODEL ────────────────────────────
-model = AthenaV2(input_channels=59, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+# model = AthenaV2(input_channels=10, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+model = AlphaZeroNet(input_channels=59, num_blocks=NUM_RES_BLOCKS).to("cuda")
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=LR_DECAY_RATE)
 
@@ -83,27 +87,31 @@ def loss_function(policy_pred, value_pred, policy_tgt, value_tgt):
 
 
 # ─────────────────────────── EVAL ─────────────────────────────
-def evaluate(model, loader):
+def evaluate(model):
     model.eval()
     total_loss = total_from = total_to = total = total_v_mse = 0
 
     with torch.no_grad():
-        for X, P_tgt, V_tgt in loader:
+        for X, P_tgt, V_tgt, fen in test_loader:
             X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
             P_pred, V_pred = model(X)
 
             loss, _ = loss_function(P_pred, V_pred, P_tgt, V_tgt)
             bs = X.size(0)
             total_loss += loss.item() * bs
+            pred_moves = aegis.decode_move(P_pred, fen)
+            target_moves = aegis.decode_move(P_tgt, fen)
 
-            # accuracy per head
-            from_pred = P_pred[:, 0].reshape(bs, 64).argmax(1)
-            to_pred = P_pred[:, 1].reshape(bs, 64).argmax(1)
-            from_tgt = P_tgt[:, 0].reshape(bs, 64).argmax(1)
-            to_tgt = P_tgt[:, 1].reshape(bs, 64).argmax(1)
+            for pred_move, target_move in zip(pred_moves, target_moves):
+                pred_move = str(pred_move)
+                target_move = str(target_move)
+                pred_from = pred_move[:2]
+                target_from = target_move[:2]
+                pred_to = pred_move[2:4]
+                target_to = target_move[2:4]
 
-            total_from += (from_pred == from_tgt).sum().item()
-            total_to += (to_pred == to_tgt).sum().item()
+                total_from += pred_from == target_from
+                total_to += pred_to == target_to
 
             v_pred = V_pred.squeeze(1)
             v_tgt = V_tgt.squeeze(1)
@@ -155,7 +163,7 @@ for epoch in range(NUM_EPOCHS):
 
         # ----- periodic evaluation -----
         if step % EVAL_MODEL_INT == 0:
-            metrics = evaluate(model, test_loader)
+            metrics = evaluate(model)
             logger.info(
                 f"eval_loss: {metrics['eval_loss']:.4f}    eval_value_loss: {metrics['eval_value_loss']:.4f}    from_acc: {metrics['eval_from_accuracy']:.3%}    to_acc: {metrics['eval_to_accuracy']:.3%}    ACCURACY:{metrics['eval_overall_accuracy']:.3%}"
             )

@@ -112,25 +112,39 @@ class AthenaV2(nn.Module):
     def __init__(self, input_channels=59, width=256, num_res_blocks=30, device="auto"):
         super().__init__()
         self.device = device_selector(device, label="AthenaV2")
-        Norm = nn.GroupNorm if num_res_blocks > 25 else nn.BatchNorm2d
+
+        if num_res_blocks > 25:
+
+            def Norm(c, groups=32):
+                g = groups if c % groups == 0 else 1  # ≤— changed line
+                return nn.GroupNorm(g, c)
+
+        else:
+
+            def Norm(c):
+                return nn.BatchNorm2d(c)
+
         self.stem = nn.Sequential(
             nn.Conv2d(input_channels, width, 3, 1, 1, bias=False),
             Norm(width),
             nn.ReLU(inplace=True),
         )
+
         self.body = nn.Sequential(
             *[
-                Block(width, p_survive=1 - 0.5 * i / num_res_blocks, norm=Norm)
+                Block(
+                    width, p_survive=1 - 0.5 * i / num_res_blocks, norm=Norm
+                )  # Block will call Norm(width)
                 for i in range(num_res_blocks)
             ]
         )
 
         # policy head
-        self.pol_conv = nn.Conv2d(width, 2, 1)  # direct logits
+        self.pol_conv = nn.Conv2d(width, 2, 1)
 
         # value head
         self.val_conv = nn.Conv2d(width, 1, 1)
-        self.val_norm = Norm(1)
+        self.val_norm = Norm(1)  # works for both GN & BN
         self.val_fc = nn.Linear(1, 1)
 
     def forward(self, x):

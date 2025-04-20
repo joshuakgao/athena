@@ -30,8 +30,8 @@ class AegisDataset:
     def encode_eval(self, evals):
         return _encode_eval(evals)
 
-    def decode_move_policy(self, fens, policies):
-        return _decode_move_policy(fens, policies)
+    def decode_move(self, fens, policies):
+        return _decode_move(fens, policies)
 
 
 class AegisTrainDataset(Dataset):
@@ -132,7 +132,7 @@ class AegisTestDataset(Dataset):
         x = _encode_position([fen], [history])
         y = _encode_move([best_move])
         v = _encode_eval([centipawn])
-        return x[0], y[0], v[0]
+        return x[0], y[0], v[0], fen
 
 
 def _encode_position(fens, histories):
@@ -246,7 +246,7 @@ def _encode_move(ucis):
     return torch.tensor(outputs)
 
 
-def _decode_move_policy(policies, fens):
+def _decode_move(policies, fens):
     """Decode policy output tensor (shape [2, 8, 8]) to a single UCI move."""
     best_moves = []
     for policy, fen in zip(policies, fens):
@@ -256,7 +256,11 @@ def _decode_move_policy(policies, fens):
             return None
 
         # Check policy tensor shape
-        assert policy.shape == (2, 8, 8)
+        assert policy.shape == (
+            2,
+            8,
+            8,
+        ), f"Policy shape needs to be (2, 8, 8). Provided policy shape of {policy.shape}"
 
         # Flatten the policy layers
         policy_from_flat = policy[0].flatten()
