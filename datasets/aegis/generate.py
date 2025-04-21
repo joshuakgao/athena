@@ -249,10 +249,8 @@ def parse_jsonl_into_parquet(
                         board = chess.Board(root_fen, chess960=True)
                         cp = pv.get("cp", "")
                         if not cp:
-                            if board.turn == chess.WHITE:
-                                cp = 9999
-                            else:
-                                cp = -9999
+                            continue
+
                         for i, move in enumerate(moves):
                             fen = board.fen()
                             fen = normalize_fen(fen)
