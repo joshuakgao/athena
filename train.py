@@ -46,8 +46,8 @@ train_loader = DataLoader(
 test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 
 # ─────────────────────────── MODEL ────────────────────────────
-model = Athena(input_channels=59, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
-# model = AthenaV2(input_channels=10, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+# model = Athena(input_channels=59, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+model = AthenaV2(input_channels=59, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
 # model = AlphaZeroNet(input_channels=59, num_blocks=NUM_RES_BLOCKS).to("cuda")
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=LR_DECAY_RATE)
@@ -92,6 +92,7 @@ def loss_function(policy_pred, value_pred, policy_tgt, value_tgt):
 def evaluate(model):
     model.eval()
     total_loss = total_from = total_to = total = total_v_mse = 0
+    printed = 0  # Counter for printed examples
 
     with torch.no_grad():
         for X, P_tgt, V_tgt, fens, bots, depths, elos, evals in test_loader:
@@ -137,7 +138,7 @@ def evaluate(model):
                 pred_eval = aegis.decode_eval([eval_pred])[0]
                 target_eval = aegis.decode_eval([eval_tgt])[0]
 
-                if i < 1:
+                if printed < 20:
                     if pred_move == target_move:
                         print(
                             f"{fen} {pred_move} {pred_eval:.2f} {target_eval:.2f} ✅ {bot} {elo} {depth}"
@@ -146,6 +147,7 @@ def evaluate(model):
                         print(
                             f"{fen} {pred_move} {target_move} {pred_eval:.2f} {target_eval:.2f} ❌ {bot} {elo} {depth}"
                         )
+                    printed += 1
 
                 total_from += pred_from == target_from
                 total_to += pred_to == target_to
