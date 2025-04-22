@@ -137,14 +137,15 @@ def evaluate(model):
                 pred_eval = aegis.decode_eval([eval_pred])[0]
                 target_eval = aegis.decode_eval([eval_tgt])[0]
 
-                if pred_move == target_move:
-                    print(
-                        f"{fen} {pred_move} {pred_eval:.2f} {target_eval:.2f} ✅ {bot} {elo} {depth}"
-                    )
-                else:
-                    print(
-                        f"{fen} {pred_move} {target_move} {pred_eval:.2f} {target_eval:.2f} ❌ {bot} {elo} {depth}"
-                    )
+                if i < 1:
+                    if pred_move == target_move:
+                        print(
+                            f"{fen} {pred_move} {pred_eval:.2f} {target_eval:.2f} ✅ {bot} {elo} {depth}"
+                        )
+                    else:
+                        print(
+                            f"{fen} {pred_move} {target_move} {pred_eval:.2f} {target_eval:.2f} ❌ {bot} {elo} {depth}"
+                        )
 
                 total_from += pred_from == target_from
                 total_to += pred_to == target_to
