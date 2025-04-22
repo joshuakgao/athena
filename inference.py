@@ -1,254 +1,130 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""
+Play-off between two policy‑value chess networks.
+
+Prerequisites
+-------------
+• python-chess        (`pip install chess`)
+• torch               (`pip install torch`)
+• The two model classes (Athena, AthenaV2, …) plus the helpers
+  `_encode_position`  and `_decode_move` must be import‑able.
+
+Usage
+-----
+$ python self_play.py --games 200 \
+                      --white_ckpt checkpoints/athena.pt \
+                      --black_ckpt checkpoints/athena_v2.pt
+"""
+import argparse
+import random
+from pathlib import Path
+
 import chess
 import torch
-import numpy as np
-from architecture import Athena
+from tqdm import trange
+
+# ---  import your own code  -------------------------------------------------
+from architecture import Athena, AthenaV2  # ← adjust if your classes live elsewhere
+from alphazero_arch import AlphaZeroNet
+from datasets.aegis.dataset import _encode_position, _decode_move  # ← adjust import
+
+# ----------------------------------------------------------------------------
+
+# DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = "cpu"
 
 
-class AthenaChessEngine:
-    def __init__(self, model_path, device="auto"):
-        """
-        Initialize the Athena chess engine with a trained model.
-
-        Args:
-            model_path (str): Path to the saved model weights
-            device (str): Device to run the model on ('cpu', 'cuda', or 'auto')
-        """
-        # Determine the device to use
-        if device == "auto":
-            device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-        else:
-            device = torch.device(device)
-
-        self.device = device
-        self.model = Athena(device=device)
-
-        # Load the model with proper device mapping
-        try:
-            # Load model and ensure all tensors are on the correct device
-            state_dict = torch.load(model_path, map_location=device)
-            self.model.load_state_dict(state_dict)
-            self.model.to(device)
-
-            # Print device information
-            print(f"Model loaded on device: {device}")
-            if str(device) == "cpu" and "cuda" in str(
-                next(self.model.parameters()).device
-            ):
-                print(
-                    "Warning: Model was trained on GPU but running on CPU. Performance may be slower."
-                )
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            raise
-
-        self.board = chess.Board()
-
-    def reset(self):
-        """Reset the chess board to starting position."""
-        self.board.reset()
-
-    def get_move(self, temperature=0.1):
-        """
-        Get Athena's move for the current board position.
-
-        Args:
-            temperature (float): Controls randomness in move selection (0 = always best move)
-
-        Returns:
-            chess.Move: The selected move
-        """
-        # Encode current board position
-        fen = self.board.fen()
-        input_tensor = self.model.encode_input([fen]).to(self.device)
-
-        # Get model predictions
-        with torch.no_grad():
-            policy, value = self.model(input_tensor)
-            print(
-                f"Position evaluation (centipawns): {self.model.decode_value_output(value).item():.1f}"
-            )
-
-            # Print policy information
-            policy_np = policy.squeeze().cpu().numpy()
-            print("\nFrom square probabilities:")
-            self._print_chessboard(policy_np[0])
-            print("\nTo square probabilities:")
-            self._print_chessboard(policy_np[1])
-
-        legal_moves = list(self.board.legal_moves)
-        if not legal_moves:
-            return None
-
-        # Calculate move scores
-        move_scores = []
-        for move in legal_moves:
-            from_sq = (7 - (move.from_square // 8), move.from_square % 8)
-            to_sq = (7 - (move.to_square // 8), move.to_square % 8)
-
-            # Multiply from and to probabilities
-            score = (
-                policy_np[0, from_sq[0], from_sq[1]] * policy_np[1, to_sq[0], to_sq[1]]
-            )
-            move_scores.append(score)
-
-        move_scores = np.array(move_scores)
-
-        # Apply temperature scaling
-        if temperature > 0:
-            # Convert scores to probabilities with temperature
-            exp_scores = np.exp(np.log(move_scores + 1e-10) / temperature)
-            move_probs = exp_scores / exp_scores.sum()
-        else:
-            # Deterministic selection
-            move_probs = np.zeros_like(move_scores)
-            move_probs[np.argmax(move_scores)] = 1.0
-
-        # Select a move
-        selected_idx = (
-            np.random.choice(len(legal_moves), p=move_probs)
-            if temperature > 0
-            else np.argmax(move_probs)
-        )
-        best_move = legal_moves[selected_idx]
-
-        # Print move information
-        print(f"\nSelected move: {best_move.uci()}")
-        print(f"Move probability: {move_probs[selected_idx]:.4f}")
-        if temperature > 0:
-            print(f"Temperature: {temperature} (higher = more random)")
-
-        return best_move
-
-    def _print_chessboard(self, matrix):
-        """Helper to print an 8x8 matrix in chess board format."""
-        print("   a     b     c     d     e     f     g     h")
-        for i, row in enumerate(matrix):
-            print(8 - i, end=" ")
-            for val in row:
-                print(f"{val:.3f}", end=" ")
-            print()
-
-    def make_move(self, move):
-        """
-        Make a move on the board.
-
-        Args:
-            move: Either a chess.Move object or a string in UCI format
-        """
-        if isinstance(move, str):
-            move = chess.Move.from_uci(move)
-        self.board.push(move)
-
-    def play_human(self, human_color=chess.WHITE):
-        """
-        Play a game against Athena in the terminal.
-
-        Args:
-            human_color: chess.WHITE or chess.BLACK (default: human plays as white)
-        """
-        print("Starting new game!")
-        print(
-            "Athena is playing as", "Black" if human_color == chess.WHITE else "White"
-        )
-        print("Type 'quit' to exit or 'reset' to start a new game")
-
-        self.reset()
-
-        while not self.board.is_game_over():
-            print("\n" + str(self.board) + "\n")
-
-            if self.board.turn == human_color:
-                # Human's turn
-                while True:
-                    move_input = input(
-                        "Your move (in UCI format, e.g. 'e2e4'): "
-                    ).strip()
-
-                    if move_input.lower() == "quit":
-                        return
-                    if move_input.lower() == "reset":
-                        self.reset()
-                        print("\nGame reset!")
-                        break
-
-                    try:
-                        move = chess.Move.from_uci(move_input)
-                        if move in self.board.legal_moves:
-                            self.make_move(move)
-                            break
-                        else:
-                            print("Illegal move! Try again.")
-                    except:
-                        print("Invalid move format! Try again.")
-            else:
-                # Athena's turn
-                print("Athena is thinking...")
-                move = self.get_move(temperature=0.1)
-                self.make_move(move)
-                print(f"Athena plays: {move.uci()}")
-
-        print("\nGame over!")
-        print("Final position:")
-        print("\n" + str(self.board) + "\n")
-        print("Result:", self.board.result())
-
-    def self_play(self, max_moves=200):
-        """
-        Watch Athena play against itself.
-
-        Args:
-            max_moves: Maximum number of moves before ending the game
-        """
-        print("Athena self-play mode")
-        print("Press Enter to advance moves or type 'quit' to exit")
-
-        self.reset()
-        move_count = 0
-
-        while not self.board.is_game_over() and move_count < max_moves:
-            print("\nMove", move_count + 1)
-            print("\n" + str(self.board) + "\n")
-
-            user_input = input("Press Enter to continue or 'quit' to exit: ").strip()
-            if user_input.lower() == "quit":
-                return
-
-            move = self.get_move(temperature=0.1)
-            self.make_move(move)
-            print(f"Athena plays: {move.uci()}")
-            move_count += 1
-
-        print("\nGame over!")
-        print("Final position:")
-        print("\n" + str(self.board) + "\n")
-        print("Result:", self.board.result())
+@torch.no_grad()
+def model_move(model, board):
+    """Return the best legal move predicted by `model` for the current `board`."""
+    fen = board.fen()
+    # history isn’t used in the current implementation, so pass an empty list
+    x = _encode_position([fen], [[]]).to(DEVICE)  # [1, 59, 8, 8]
+    policy_logits, _ = model(x)  # [1, 2, 8, 8], [1, 1]
+    move = _decode_move([policy_logits[0].cpu()], [fen])[0]
+    return move
 
 
-if __name__ == "__main__":
-    import argparse
+def play_single_game(model_white, model_black, max_plies=400):
+    """Play one game; return 1 for white win, -1 for black win, 0 for draw."""
+    board = chess.Board()
+    models = {chess.WHITE: model_white, chess.BLACK: model_black}
 
-    parser = argparse.ArgumentParser(description="Athena Chess Engine")
+    for _ in range(max_plies):
+        if board.is_game_over():
+            break
+        move = model_move(models[board.turn], board)
+        if move is None:  # no legal moves (shouldn’t happen)
+            break
+        board.push(move)
+
+    # Determine result
+    result = board.result()  # '1-0', '0-1', '1/2-1/2', or '*'
+    if result == "1-0":
+        return 1
+    if result == "0-1":
+        return -1
+    return 0  # draw or unfinished
+
+
+def load_model(model_cls, ckpt_path=None):
+    """Instantiate `model_cls`, load weights (if provided), set eval mode."""
+    model = model_cls(device=DEVICE).to(DEVICE)
+    if ckpt_path:
+        state = torch.load(ckpt_path, map_location=DEVICE)
+        model.load_state_dict(state)
+    model.eval()
+    return model
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Self‑play evaluation")
+    parser.add_argument("--games", type=int, default=100, help="Number of games")
     parser.add_argument(
-        "--model", type=str, required=True, help="Path to trained model"
+        "--white_ckpt",
+        type=Path,
+        default=None,
+        help="Checkpoint for model A (white in game 1)",
     )
     parser.add_argument(
-        "--mode",
-        choices=["human", "self"],
-        default="human",
-        help="Play against human or self-play",
-    )
-    parser.add_argument(
-        "--color",
-        choices=["white", "black"],
-        default="white",
-        help="Color to play as when playing against human",
+        "--black_ckpt",
+        type=Path,
+        default=None,
+        help="Checkpoint for model B (black in game 1)",
     )
     args = parser.parse_args()
 
-    engine = AthenaChessEngine(args.model)
+    # Create *two* separate model objects
+    model_A = load_model(AlphaZeroNet, args.white_ckpt)
+    model_B = load_model(Athena, args.black_ckpt)
 
-    if args.mode == "human":
-        human_color = chess.WHITE if args.color == "white" else chess.BLACK
-        engine.play_human(human_color)
-    else:
-        engine.self_play()
+    results = {"A_wins": 0, "B_wins": 0, "draws": 0}
+
+    for g in trange(args.games, desc="Self‑play"):
+        # Alternate colours each game for fairness
+        if g % 2 == 0:
+            score = play_single_game(model_A, model_B)
+        else:
+            score = -play_single_game(model_B, model_A)  # swap colours & flip score
+
+        if score == 1:
+            results["A_wins"] += 1
+        elif score == -1:
+            results["B_wins"] += 1
+        else:
+            results["draws"] += 1
+
+    print("\n=== Final tallies ===")
+    print(f"Model A wins : {results['A_wins']}")
+    print(f"Model B wins : {results['B_wins']}")
+    print(f"Draws        : {results['draws']}")
+    total = sum(results.values())
+    if total:
+        print(f"Win‑rate A   : {results['A_wins'] / total:.3%}")
+        print(f"Win‑rate B   : {results['B_wins'] / total:.3%}")
+
+
+if __name__ == "__main__":
+    torch.set_grad_enabled(False)  # just in case
+    main()

@@ -169,8 +169,7 @@ def _encode_position(fens, histories):
         board = chess.Board(fen)
         layer_idx = 0
 
-        # history.insert(0, fen)
-        history = [fen]
+        history.insert(0, fen)
         for _fen in history:
             _board = chess.Board(_fen)
             if _fen == None:
