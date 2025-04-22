@@ -28,9 +28,9 @@ output_dir_path = Path(dir)
 test_output_path = output_dir_path / "test.parquet"  # Path for test set
 rows_per_temp_parquet_write = 1_000_000
 positions_per_shard = 1_000_000
-min_elo_threshold = 2500
+min_elo_threshold = 3000
 min_depth_threshold = 0
-samples_per_shard_for_test = 10  # Number of samples per shard for test set
+samples_per_shard_for_test = 100  # Number of samples per shard for test set
 
 # Calculate 90% of available memory
 available_memory = psutil.virtual_memory().available
