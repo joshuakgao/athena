@@ -51,7 +51,7 @@ ARROW_SCHEMA = pa.schema(
         ("history", pa.list_(pa.string())),
         ("bot", pa.string()),
         ("depth", pa.int32()),
-        ("eval", pa.float32()),
+        ("eval", pa.int32()),
     ]
 )
 
@@ -163,7 +163,7 @@ def extract_eval_and_depth(comment):
     return None, None
 
 
-def parse_jsonl_into_parquet(
+def parse_lichess_eval_jsonl_to_parquet(
     jsonl_path, temp_dir_path, schema, rows_per_write=1_000_000
 ):
     """
@@ -181,117 +181,90 @@ def parse_jsonl_into_parquet(
           ...
         ]
       }
-
-    For each eval_item in "evals":
-      1. Identify the *first* PV's line as the "best move" source.
-      2. For *each* PV in that eval_item:
-         - parse the moves in 'line',
-         - push up to 7 moves to get 7 subsequent FENs,
-         - store that list in "history",
-         - store "best_move" from (1) so all PVs share the same best_move for that eval_item,
-         - set "eval" to a big number if 'mate' in the PV, else 'cp', else 0,
-         - store "depth" from eval_item["depth"].
-
-    Writes rows into "temp_jsonl_*.parquet" using your ARROW_SCHEMA.
     """
     temp_dir_path.mkdir(parents=True, exist_ok=True)
     batch = []
     file_index = 0
+    file_size = jsonl_path.stat().st_size
 
-    with open(jsonl_path, "r", encoding="utf-8") as f:
-        # get number of lines in jsonl file
-        logger.info("Getting number of lines in jsonl file.")
-        count = 0
-        for line in f:
-            count += 1
+    with open(jsonl_path, "rb") as f:  # open in binary mode for correct byte counting
+        with tqdm(
+            total=file_size, unit="B", unit_scale=True, desc="Reading JSONL"
+        ) as pbar:
+            for raw_bytes in f:
+                line = raw_bytes.decode("utf-8").strip()
+                pbar.update(len(raw_bytes))  # update with actual byte length read
 
-    with open(jsonl_path, "r", encoding="utf-8") as f:
-        logger.info(f"Process {jsonl_path.name} file of length {count}.")
-        for line_num, line in tqdm(
-            enumerate(f, start=1), total=count, desc=f"Processing {jsonl_path.name}"
-        ):
-            line = line.strip()
-            if not line:
-                continue  # skip empty lines
+                line = line.strip()
+                if not line:
+                    continue  # skip empty lines
 
-            # Parse JSON
-            try:
-                data = json.loads(line)
-            except json.JSONDecodeError as e:
-                print(f"Skipping invalid JSON at line {line_num}: {e}")
-                continue
+                # Parse JSON
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Skipping invalid JSON: {e}")
+                    continue
 
-            # Grab FEN + evals
-            fen = data.get("fen", "")
-            fen = fen.split()
-            fen.append("0")
-            fen.append("1")
-            root_fen = " ".join(fen)
-            evals_list = data.get("evals", [])
-            if not fen or not evals_list:
-                logger.info("Fen or evals list not found")
-                continue
+                # Grab FEN + evals
+                fen = data.get("fen")
+                fen = fen.split()
+                fen.append("0")
+                fen.append("1")
+                fen = " ".join(fen)
+                evals_list = data.get("evals", [])
+                if not fen or not evals_list:
+                    continue
 
-            for eval_item in evals_list:
-                pvs = eval_item.get("pvs", [])
-                depth_val = eval_item.get("depth", 0)
-                if not pvs:
-                    logger.info("Pvs not found")
-                    continue  # no PVs -> skip
+                deepest_eval = max(
+                    (e for e in evals_list if e.get("pvs")),
+                    key=lambda e: e["depth"],
+                    default=None,
+                )
+                if deepest_eval is None:
+                    continue
 
-                for pv in pvs:
-                    best_line_str = pv.get("line", "")
+                if deepest_eval["depth"] < 10:
+                    continue
 
-                    if best_line_str:
-                        # The very first token in the line is the best move
-                        moves = best_line_str.split()
-                        fen_history = deque(maxlen=7)
-                        board = chess.Board(root_fen, chess960=True)
-                        cp = pv.get("cp", "")
-                        if not cp:
-                            continue
+                pv = deepest_eval["pvs"][0]
+                score = pv.get("cp")
+                if score is None:
+                    mate = pv.get("mate")
+                    if mate is None:
+                        continue
+                    score = 10_000 if mate > 0 else -10_000
 
-                        for i, move in enumerate(moves):
-                            fen = board.fen()
-                            fen = normalize_fen(fen)
-                            best_move = move
-                            entry = {
-                                "fen": fen,
-                                "best_move": best_move,
-                                "elo": 3529,  # for stockfish
-                                "history": list(fen_history),
-                                "bot": "Stockfish",  # placeholder or set to something relevant
-                                "depth": depth_val,
-                                "eval": float(cp),
-                            }
-                            batch.append(entry)
+                pv_line = pv.get("line", "").strip()
+                if not pv_line:
+                    continue
 
-                            fen_history.appendleft(fen)
-                            try:
-                                board.push_uci(best_move)
-                            except:
-                                logger.warning(
-                                    f"Invalid move '{best_move}' encountered. Breaking out."
-                                )
-                                break
+                best_move = pv_line.split()[0]
+                batch.append(
+                    {
+                        "fen": fen,
+                        "best_move": best_move,
+                        "depth": int(deepest_eval["depth"]),
+                        "eval": int(score),
+                        "bot": "Lichess Stockfish",
+                        "elo": 3582,
+                        "history": [],
+                    }
+                )
 
-                            # Write out periodically
-                            if len(batch) >= rows_per_write:
-                                temp_file_path = (
-                                    temp_dir_path / f"temp_jsonl_{file_index}.parquet"
-                                )
-                                written = write_batch_to_parquet(
-                                    batch, temp_file_path, schema
-                                )
-                                print(f"Wrote {written} rows to {temp_file_path.name}")
-                                batch.clear()
-                                file_index += 1
+                # Write out periodically
+                if len(batch) >= rows_per_write:
+                    temp_file_path = temp_dir_path / f"temp_jsonl_{file_index}.parquet"
+                    written = write_batch_to_parquet(batch, temp_file_path, schema)
+                    logger.info(f"Wrote {written} rows to {temp_file_path.name}")
+                    batch.clear()
+                    file_index += 1
 
     # Final flush
     if batch:
         temp_file_path = temp_dir_path / f"temp_jsonl_{file_index}.parquet"
         written = write_batch_to_parquet(batch, temp_file_path, schema)
-        print(f"Wrote final {written} rows to {temp_file_path.name}")
+        logger.info(f"Wrote final {written} rows to {temp_file_path.name}")
         batch.clear()
 
 
@@ -512,11 +485,11 @@ def generate():
         jsonl_files = list(Path(raw_dir).glob("*.jsonl"))
         for jfile in jsonl_files:
             logger.info(f"Parsing JSONL file: {jfile.name}")
-            parse_jsonl_into_parquet(
+            parse_lichess_eval_jsonl_to_parquet(
                 jsonl_path=jfile,
                 temp_dir_path=temp_dir_path,
                 schema=ARROW_SCHEMA,
-                rows_per_write=500_000,  # or whatever chunk size
+                rows_per_write=rows_per_temp_parquet_write,  # or whatever chunk size
             )
     else:
         logger.info(
