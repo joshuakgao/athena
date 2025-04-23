@@ -316,3 +316,9 @@ def _decode_eval(encoded_evals, scale=400):
     encoded_evals = encoded_evals.detach().cpu().numpy()
     recovered = np.arctanh(encoded_evals)
     return (recovered * scale).tolist()
+
+
+if __name__ == "__main__":
+    aegis = AegisDataset()
+    evals = aegis.decode_eval([0.12, -0.32])
+    print(evals)

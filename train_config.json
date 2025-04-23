@@ -1,6 +1,6 @@
 {
-    "model_name": "1.33_Alphazero19",
-    "description": "Use alphazero architecture",
+    "model_name": "1.34_Athena19v2",
+    "description": "Back to Athenav2 arch. Use eval to generate move.",
     "num_epochs": 100,
     "lr": 0.0006,
     "lr_decay_rate": 0.9,
