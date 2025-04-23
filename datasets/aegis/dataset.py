@@ -150,7 +150,7 @@ class AegisTestDataset(Dataset):
 
 def _encode_position(fens, histories):
     """
-    Encode a batch of FEN strings into a batch of input tensors with shape (batch_size, 59, 8, 8).
+    Encode a batch of FEN strings into a batch of input tensors with shape (batch_size, 10, 8, 8).
     6 layers for each piece type (pawn, knight, bishop, rook, queen, king), 1 layer for castling rights
     8 fens are then encoded in this manner (1 current + 7 history),
     1 layer for repetition count
@@ -158,7 +158,7 @@ def _encode_position(fens, histories):
     1 layer is for who's turn it is
     """
     batch_size = len(fens)
-    inputs = np.zeros((batch_size, 59, 8, 8), dtype=np.float32)
+    inputs = np.zeros((batch_size, 10, 8, 8), dtype=np.float32)
 
     types = ["p", "n", "b", "r", "q", "k"]
     for i, (fen, history) in enumerate(zip(fens, histories)):
@@ -169,7 +169,8 @@ def _encode_position(fens, histories):
         board = chess.Board(fen)
         layer_idx = 0
 
-        history.insert(0, fen)
+        # history.insert(0, fen)
+        history = [fen]
         for _fen in history:
             _board = chess.Board(_fen)
             if _fen == None:
@@ -201,24 +202,32 @@ def _encode_position(fens, histories):
             inputs[i, layer_idx, :, :] = castling_tensor
             layer_idx += 1
 
-        # Encode repetition
-        repetition_count = 0
-        if board.is_repetition(count=1):
-            repetition_count = 1
-        elif board.is_repetition(count=2):
-            repetition_count = 2
-        elif board.is_repetition(count=3):
-            repetition_count = 3
-        elif board.is_repetition(count=4):
-            repetition_count = 4
-        elif board.is_repetition(count=5):
-            repetition_count = 5
-        elif board.is_repetition(count=6):
-            repetition_count = 6
-        elif board.is_repetition(count=7):
-            repetition_count = 7
-        inputs[i, layer_idx, :, :] = np.full((8, 8), repetition_count, dtype=np.float32)
-        layer_idx += 1
+            # Encode En Passant
+            en_passant_tensor = np.zeros((8, 8), dtype=np.float32)
+            if board.ep_square is not None:
+                row, col = divmod(board.ep_square, 8)
+                en_passant_tensor[row, col] = 1
+            inputs[i, layer_idx, :, :] = en_passant_tensor
+            layer_idx += 1
+
+        # # Encode repetition
+        # repetition_count = 0
+        # if board.is_repetition(count=1):
+        #     repetition_count = 1
+        # elif board.is_repetition(count=2):
+        #     repetition_count = 2
+        # elif board.is_repetition(count=3):
+        #     repetition_count = 3
+        # elif board.is_repetition(count=4):
+        #     repetition_count = 4
+        # elif board.is_repetition(count=5):
+        #     repetition_count = 5
+        # elif board.is_repetition(count=6):
+        #     repetition_count = 6
+        # elif board.is_repetition(count=7):
+        #     repetition_count = 7
+        # inputs[i, layer_idx, :, :] = np.full((8, 8), repetition_count, dtype=np.float32)
+        # layer_idx += 1
 
         # Encode turn
         turn = board.turn

@@ -72,7 +72,7 @@ class AlphaZeroNet(nn.Module):
 
     def __init__(
         self,
-        input_channels: int = 59,
+        input_channels: int = 10,
         channels: int = 256,
         num_blocks: int = 19,
         board_size: int = 8,
@@ -144,14 +144,3 @@ class AlphaZeroNet(nn.Module):
         value = self.value_head(out)  # [batch, 1]
 
         return policy_logits, value
-
-
-# ----------------------------- quick demo ---------------------------------
-if __name__ == "__main__":
-    batch = 4
-    board = 8
-    # Example for chess with 59 planes (your custom encoder) or 119 standard planes
-    net = AlphaZeroNet(input_channels=59, channels=192, num_blocks=20, board_size=board)
-    x = torch.randn(batch, 59, board, board)
-    p, v = net(x)
-    print("policy:", p.shape, " value:", v.shape)
