@@ -7,6 +7,7 @@ wandb/
 nohup.out
 *.o*
 daily_challenge_times.txt
+selfplay_games.pgn
 
 # aegis generation temp files
 datasets/aegis/temp_parquet

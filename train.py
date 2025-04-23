@@ -213,9 +213,7 @@ for epoch in range(NUM_EPOCHS):
             if metrics["eval_overall_accuracy"] > best_acc:
                 best_acc = metrics["eval_overall_accuracy"]
                 os.makedirs("checkpoints", exist_ok=True)
-                torch.save(
-                    model.state_dict(), f"checkpoints/best_model_{MODEL_NAME}.pt"
-                )
+                torch.save(model.state_dict(), f"checkpoints/{MODEL_NAME}.pt")
                 logger.info(f"New best model saved ({best_acc:.3%})")
 
     # end‑epoch housekeeping
