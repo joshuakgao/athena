@@ -157,3 +157,59 @@ class AthenaV2(nn.Module):
         v = torch.tanh(self.val_fc(v))  # [B,1]
 
         return p, v
+
+
+class AthenaV3(nn.Module):
+    def __init__(self, input_channels=10, width=256, num_res_blocks=30, device="auto"):
+        super().__init__()
+        self.device = device_selector(device, label="AthenaV2")
+
+        # Normalization selection
+        if num_res_blocks > 25:
+
+            def Norm(c, groups=32):
+                g = groups if c % groups == 0 else 1
+                return nn.GroupNorm(g, c)
+
+        else:
+
+            def Norm(c):
+                return nn.BatchNorm2d(c)
+
+        # Input stem
+        self.stem = nn.Sequential(
+            nn.Conv2d(input_channels, width, 3, 1, 1, bias=False),
+            Norm(width),
+            nn.ReLU(inplace=True),
+        )
+
+        # Residual tower
+        self.body = nn.Sequential(
+            *[
+                Block(width, p_survive=1 - 0.5 * i / num_res_blocks, norm=Norm)
+                for i in range(num_res_blocks)
+            ]
+        )
+
+        # Policy head (now outputs 73 channels)
+        self.pol_conv = nn.Conv2d(width, 73, 1)  # Changed from 2 to 73
+        self.pol_norm = Norm(73)
+
+        # Value head (unchanged)
+        self.val_conv = nn.Conv2d(width, 1, 1)
+        self.val_norm = Norm(1)
+        self.val_fc = nn.Linear(1, 1)
+
+    def forward(self, x):
+        x = x.to(self.device)
+        x = self.body(self.stem(x))
+
+        # Policy head
+        p = F.relu(self.pol_norm(self.pol_conv(x)))  # [B,73,8,8]
+
+        # Value head
+        v = F.relu(self.val_norm(self.val_conv(x)))
+        v = F.adaptive_avg_pool2d(v, 1).view(x.size(0), 1)
+        v = torch.tanh(self.val_fc(v))  # [B,1]
+
+        return p, v

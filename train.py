@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 import wandb
-from architecture import Athena, AthenaV2
+from architecture import Athena, AthenaV2, AthenaV3
 from alphazero_arch import AlphaZeroNet
 from datasets.aegis.dataset import AegisDataset
 
@@ -47,7 +47,8 @@ test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 
 # ─────────────────────────── MODEL ────────────────────────────
 # model = Athena(input_channels=10, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
-model = AthenaV2(input_channels=10, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+# model = AthenaV2(input_channels=10, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+model = AthenaV3(input_channels=10, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
 # model = AlphaZeroNet(input_channels=10, num_blocks=NUM_RES_BLOCKS).to("cuda")
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=LR_DECAY_RATE)
@@ -60,30 +61,23 @@ if USE_WANDB:
 
 # ─────────────────────────── LOSS ─────────────────────────────
 def loss_function(policy_pred, value_pred, policy_tgt, value_tgt):
-    """Dual‑head AlphaZero‑style loss."""
+    """For 73×8×8 policy head."""
     B = policy_pred.size(0)
 
-    # ---------- policy sub‑loss ----------
-    from_logits = policy_pred[:, 0].reshape(B, 64)
-    to_logits = policy_pred[:, 1].reshape(B, 64)
+    # Reshape and compute cross-entropy
+    policy_pred = policy_pred.view(B, 73, -1)  # [B,73,64]
+    policy_tgt = policy_tgt.view(B, 73, -1)
+    loss_policy = F.cross_entropy(
+        policy_pred, policy_tgt.argmax(dim=1)  # Target is index of correct move type
+    )
 
-    from_idx = policy_tgt[:, 0].reshape(B, 64).argmax(dim=-1)
-    to_idx = policy_tgt[:, 1].reshape(B, 64).argmax(dim=-1)
-
-    loss_from = F.cross_entropy(from_logits, from_idx)
-    loss_to = F.cross_entropy(to_logits, to_idx)
-    loss_policy = (loss_from + loss_to) / 2
-
-    # ---------- value sub‑loss ----------
-    value_pred = value_pred.squeeze(1)  # [B]
+    # Value loss remains same
+    value_pred = value_pred.squeeze(1)
     value_tgt = value_tgt.squeeze(1)
     loss_value = F.mse_loss(value_pred, value_tgt)
 
-    # combine (equal weights)
-    loss = loss_policy + loss_value
-    return loss, {
-        "from": loss_from.detach(),
-        "to": loss_to.detach(),
+    return loss_policy + loss_value, {
+        "policy": loss_policy.detach(),
         "value": loss_value.detach(),
     }
 
@@ -91,7 +85,7 @@ def loss_function(policy_pred, value_pred, policy_tgt, value_tgt):
 # ─────────────────────────── EVAL ─────────────────────────────
 def evaluate(model):
     model.eval()
-    total_loss = total_from = total_to = total = total_v_mse = 0
+    total_loss = total_correct = total = total_v_mse = 0
     printed = 0  # Counter for printed examples
 
     with torch.no_grad():
@@ -102,6 +96,8 @@ def evaluate(model):
             loss, _ = loss_function(P_pred, V_pred, P_tgt, V_tgt)
             bs = X.size(0)
             total_loss += loss.item() * bs
+
+            # Get predicted and target moves
             pred_moves = aegis.decode_move(P_pred, fens)
             target_moves = aegis.decode_move(P_tgt, fens)
 
@@ -130,14 +126,12 @@ def evaluate(model):
             ):
                 pred_move = str(pred_move)
                 target_move = str(target_move)
-                pred_from = pred_move[:2]
-                target_from = target_move[:2]
-                pred_to = pred_move[2:4]
-                target_to = target_move[2:4]
 
+                # Decode evaluations
                 pred_eval = aegis.decode_eval([eval_pred])[0]
                 target_eval = aegis.decode_eval([eval_tgt])[0]
 
+                # Print sample predictions
                 if printed < 20:
                     if pred_move == target_move:
                         print(
@@ -149,9 +143,10 @@ def evaluate(model):
                         )
                     printed += 1
 
-                total_from += pred_from == target_from
-                total_to += pred_to == target_to
+                # Count correct predictions (full move match)
+                total_correct += pred_move == target_move
 
+            # Value loss calculation
             v_pred = V_pred.squeeze(1)
             v_tgt = V_tgt.squeeze(1)
             total_v_mse += F.mse_loss(v_pred, v_tgt, reduction="sum").item()
@@ -161,9 +156,7 @@ def evaluate(model):
     return {
         "eval_loss": total_loss / total,
         "eval_value_loss": total_v_mse / total,
-        "eval_from_accuracy": total_from / total,
-        "eval_to_accuracy": total_to / total,
-        "eval_overall_accuracy": (total_from + total_to) / (2 * total),
+        "eval_accuracy": total_correct / total,  # Full move accuracy
     }
 
 
@@ -187,14 +180,13 @@ for epoch in range(NUM_EPOCHS):
         if step % CHECK_METRICS_INT == 0:
             lr = scheduler.get_last_lr()[0]
             logger.info(
-                f"{epoch+1}: {step}/{iters_per_epoch}    loss: {loss:.4f}    from_loss: {parts['from']:.4f}    to_loss: {parts['to']:.4f}    value_loss: {parts['value']:.4f}    lr: {lr:.2e}"
+                f"{epoch+1}: {step}/{iters_per_epoch}    loss: {loss:.4f}    policy_loss {parts['policy']:.4f}    value_loss: {parts['value']:.4f}    lr: {lr:.2e}"
             )
             if USE_WANDB:
                 wandb.log(
                     {
                         "train_loss": loss.item(),
-                        "train_loss_from": parts["from"].item(),
-                        "train_loss_to": parts["to"].item(),
+                        "policy_loss": parts["policy"],
                         "train_loss_value": parts["value"].item(),
                         "learning_rate": lr,
                     }
@@ -204,14 +196,14 @@ for epoch in range(NUM_EPOCHS):
         if step % EVAL_MODEL_INT == 0:
             metrics = evaluate(model)
             logger.info(
-                f"eval_loss: {metrics['eval_loss']:.4f}    eval_value_loss: {metrics['eval_value_loss']:.4f}    from_acc: {metrics['eval_from_accuracy']:.3%}    to_acc: {metrics['eval_to_accuracy']:.3%}    ACCURACY:{metrics['eval_overall_accuracy']:.3%}"
+                f"eval_loss: {metrics['eval_loss']:.4f}    eval_value_loss: {metrics['eval_value_loss']:.4f}    ACCURACY:{metrics['eval_accuracy']:.3%}"
             )
 
             if USE_WANDB:
                 wandb.log({f"{k}": v for k, v in metrics.items()})
 
-            if metrics["eval_overall_accuracy"] > best_acc:
-                best_acc = metrics["eval_overall_accuracy"]
+            if metrics["eval_accuracy"] > best_acc:
+                best_acc = metrics["eval_accuracy"]
                 os.makedirs("checkpoints", exist_ok=True)
                 torch.save(model.state_dict(), f"checkpoints/{MODEL_NAME}.pt")
                 logger.info(f"New best model saved ({best_acc:.3%})")

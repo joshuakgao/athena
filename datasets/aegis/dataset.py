@@ -47,7 +47,7 @@ class AegisTrainDataset(Dataset):
         # Get all shards except test.parquet
         self.shard_paths = [
             p for p in self.dir.glob("*.parquet") if p.name != "test.parquet"
-        ]
+        ][:1]
         self.metadata_path = self.dir / "metadata.json"
         self.data = pd.DataFrame(columns=["fen", "history", "best_move", "eval"])
         self.n = n
@@ -255,26 +255,84 @@ def _encode_eval(evals, scale=400):
 
 
 def _encode_move(ucis):
-    """Encode a batch of UCI moves to a batch of output tensors with shape (batch_size, 2, 8, 8)."""
+    """Encode moves into 73×8×8 format."""
     batch_size = len(ucis)
-    outputs = np.zeros((batch_size, 2, 8, 8), dtype=np.float32)
+    outputs = torch.zeros((batch_size, 73, 8, 8))
 
     for i, uci in enumerate(ucis):
-        assert is_uci_valid(uci)
+        move = chess.Move.from_uci(uci)
+        plane_idx = _get_move_type_index(move)
+        from_row = 7 - (move.from_square // 8)
+        from_col = move.from_square % 8
+        outputs[i, plane_idx, from_row, from_col] = 1
 
-        # "From" square
-        from_row, from_col = 8 - int(uci[1]), column_letter_to_num(uci[0])
-        outputs[i, 0, from_row, from_col] = 1
+    return outputs
 
-        # "To" square
-        to_row, to_col = 8 - int(uci[3]), column_letter_to_num(uci[2])
-        outputs[i, 1, to_row, to_col] = 1
 
-    return torch.tensor(outputs)
+def _get_move_type_index(move: chess.Move) -> int:
+    """Convert a chess move to its 73-channel plane index."""
+    # ─── Queen-like Moves (0-55) ──────────────────────────────────
+    dx = chess.square_file(move.to_square) - chess.square_file(move.from_square)
+    dy = chess.square_rank(move.to_square) - chess.square_rank(move.from_square)
+
+    # 8 directions × 7 distances
+    if abs(dx) == abs(dy):  # Diagonal
+        direction = {
+            (1, 1): 0,  # NE
+            (-1, 1): 1,  # NW
+            (1, -1): 2,  # SE
+            (-1, -1): 3,  # SW
+        }[(dx // abs(dx), dy // abs(dy))]
+        distance = abs(dx) - 1  # 0-6
+        return direction * 7 + distance
+
+    elif dx == 0 or dy == 0:  # Straight
+        direction = {
+            (0, 1): 4,  # N
+            (0, -1): 5,  # S
+            (1, 0): 6,  # E
+            (-1, 0): 7,  # W
+        }[(dx // max(1, abs(dx)), dy // max(1, abs(dy)))]
+        distance = (abs(dx) + abs(dy)) - 1  # 0-6
+        return direction * 7 + distance
+
+    # ─── Knight Moves (56-63) ──────────────────────────────────────
+    elif {abs(dx), abs(dy)} == {1, 2}:
+        knight_directions = [
+            (1, 2),
+            (2, 1),
+            (-1, 2),
+            (-2, 1),
+            (1, -2),
+            (2, -1),
+            (-1, -2),
+            (-2, -1),
+        ]
+        return 56 + knight_directions.index((dx, dy))
+
+    # ─── Underpromotions (64-72) ───────────────────────────────────
+    elif move.promotion and move.promotion != chess.QUEEN:
+        promotion_type = {
+            chess.KNIGHT: 0,
+            chess.BISHOP: 1,
+            chess.ROOK: 2,
+        }[move.promotion]
+
+        # Check if capture (left/right) or push (forward)
+        if dx == -1:  # Left capture (e.g., a7→b8)
+            direction = 0
+        elif dx == 1:  # Right capture (e.g., h7→g8)
+            direction = 1
+        else:  # Forward push (e.g., e7→e8)
+            direction = 2
+
+        return 64 + promotion_type * 3 + direction
+
+    raise ValueError(f"Unclassified move: {move}")
 
 
 def _decode_move(policies, fens):
-    """Decode policy output tensor (shape [2, 8, 8]) to a single UCI move."""
+    """Convert 73×8×8 policy to UCI moves."""
     best_moves = []
     for policy, fen in zip(policies, fens):
         board = chess.Board(fen)
@@ -282,26 +340,14 @@ def _decode_move(policies, fens):
         if not legal_moves:
             return None
 
-        # Check policy tensor shape
-        assert policy.shape == (2, 8, 8)
-
-        # Flatten the policy layers
-        policy_from_flat = policy[0].flatten()
-        policy_to_flat = policy[1].flatten()
-
-        # Apply softmax to the flattened policy layers
-        policy_from = torch.softmax(policy_from_flat, dim=-1).reshape(8, 8)
-        policy_to = torch.softmax(policy_to_flat, dim=-1).reshape(8, 8)
-
-        # Score each legal move
+        # Score each legal move using policy
         move_scores = []
         for move in legal_moves:
-            from_sq = (7 - (move.from_square // 8), move.from_square % 8)
-            to_sq = (7 - (move.to_square // 8), move.to_square % 8)
-            score = policy_from[from_sq[0], from_sq[1]] * policy_to[to_sq[0], to_sq[1]]
+            plane_idx = _get_move_type_index(move)
+            from_row, from_col = 7 - (move.from_square // 8), move.from_square % 8
+            score = policy[plane_idx, from_row, from_col]
             move_scores.append(score.item())
 
-        # Select move with highest score
         best_move = legal_moves[np.argmax(move_scores)]
         best_moves.append(best_move)
     return best_moves
@@ -316,9 +362,3 @@ def _decode_eval(encoded_evals, scale=400):
     encoded_evals = encoded_evals.detach().cpu().numpy()
     recovered = np.arctanh(encoded_evals)
     return (recovered * scale).tolist()
-
-
-if __name__ == "__main__":
-    aegis = AegisDataset()
-    evals = aegis.decode_eval([0.12, -0.32])
-    print(evals)
