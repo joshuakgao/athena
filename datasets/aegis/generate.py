@@ -361,7 +361,7 @@ def generate():
 
                         if starting_fen:
                             starting_fen = normalize_fen(starting_fen)
-                            board = chess.Board(starting_fen, chess960=True)
+                            board = chess.Board(starting_fen)
                             if not board.is_valid():
                                 continue
                         else:
