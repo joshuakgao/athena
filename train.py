@@ -7,7 +7,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 import wandb
-from architecture import Athena, AthenaV2, AthenaV3
+from architecture import Athena, AthenaV2, AthenaV3, AthenaV4, AthenaV5
 from alphazero_arch import AlphaZeroNet
 from datasets.aegis.dataset import AegisDataset
 import chess
@@ -49,7 +49,7 @@ test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 # ─────────────────────────── MODEL ────────────────────────────
 # model = Athena(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
 # model = AthenaV2(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
-model = AthenaV4(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+model = AthenaV5(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
 # model = AlphaZeroNet(input_channels=119, num_blocks=NUM_RES_BLOCKS).to("cuda")
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=LR_DECAY_RATE)
