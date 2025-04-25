@@ -50,7 +50,7 @@ class AegisTrainDataset(Dataset):
         # Get all shards except test.parquet
         self.shard_paths = [
             p for p in self.dir.glob("*.parquet") if p.name != "test.parquet"
-        ][:1]
+        ]
         self.metadata_path = self.dir / "metadata.json"
         self.data = pd.DataFrame(columns=["fen", "history", "best_move", "eval"])
         self.n = n
