@@ -30,11 +30,14 @@ class AegisDataset:
     def encode_eval(self, evals):
         return _encode_eval(evals)
 
-    def decode_move(self, fens, policies):
-        return _decode_move(fens, policies)
+    def decode_move(self, policies, fens):
+        return _decode_move(policies, fens)
 
     def decode_eval(self, encoded_evals):
         return _decode_eval(encoded_evals)
+
+    def flat_index_of_move(self, move):
+        return _flat_index_of_move(move)
 
 
 class AegisTrainDataset(Dataset):
@@ -47,7 +50,7 @@ class AegisTrainDataset(Dataset):
         # Get all shards except test.parquet
         self.shard_paths = [
             p for p in self.dir.glob("*.parquet") if p.name != "test.parquet"
-        ][:1]
+        ][:3]
         self.metadata_path = self.dir / "metadata.json"
         self.data = pd.DataFrame(columns=["fen", "history", "best_move", "eval"])
         self.n = n
@@ -150,98 +153,78 @@ class AegisTestDataset(Dataset):
 
 def _encode_position(fens, histories):
     """
-    Encode a batch of FEN strings into a batch of input tensors with shape (batch_size, 10, 8, 8).
-    6 layers for each piece type (pawn, knight, bishop, rook, queen, king), 1 layer for castling rights
-    8 fens are then encoded in this manner (1 current + 7 history),
-    1 layer for repetition count
-    1 layer is a constant 1s tensor to indicate the board area to reduce the effect of edge blurring in the convlutional layers.
-    1 layer is for who's turn it is
+    AlphaZero-style encoding → Tensor  (B, 119, 8, 8)
+
+    8 half-moves (current + up to 7 previous):
+        • 6 planes  : white   {P,N,B,R,Q,K}
+        • 6 planes  : black   {p,n,b,r,q,k}
+        • 2 planes  : repetition flags
+                      plane-0 = 1  if position seen once before
+                      plane-1 = 1  if position seen ≥2× before
+    Static context (last 7 planes):
+        112 : side-to-move           (all-1 if White else all-0)
+        113 : white K-side castling  (all-1 / all-0)
+        114 : white Q-side castling
+        115 : black K-side castling
+        116 : black Q-side castling
+        117 : full-move number / 100   (float)
+        118 : half-move clock  / 100   (float)
     """
-    batch_size = len(fens)
-    inputs = np.zeros((batch_size, 10, 8, 8), dtype=np.float32)
+    B = len(fens)
+    planes = np.zeros((B, 119, 8, 8), dtype=np.float32)
 
-    types = ["p", "n", "b", "r", "q", "k"]
-    for i, (fen, history) in enumerate(zip(fens, histories)):
-        history = list(history)
-        while len(history) < 7:
-            history.append(None)
+    piece_symbols = "PNBRQKpnbrqk"  # order is important
 
-        board = chess.Board(fen)
-        layer_idx = 0
+    for b_idx, (fen, hist) in enumerate(zip(fens, histories)):
+        # -------- gather up to 8 FENs (current + 7 history) ----------
+        fen_stack = [fen] + list(hist)[:7]
+        fen_stack += [None] * (8 - len(fen_stack))  # pad with Nones
 
-        # history.insert(0, fen)
-        history = [fen]
-        for _fen in history:
-            _board = chess.Board(_fen)
-            if _fen == None:
-                for _ in range(7):
-                    inputs[i, layer_idx, :, :] = np.zeros((8, 8), dtype=np.float32)
-                    layer_idx += 1
-                continue
-            # Encode board position for each piece type
-            for type in types:
-                s = str(_board)
-                s = re.sub(f"[^{type}{type.upper()} \n]", ".", s)
-                s = re.sub(f"{type}", "-1", s)
-                s = re.sub(f"{type.upper()}", "1", s)
-                s = re.sub(f"\.", "0", s)
-                board_mat = [[int(x) for x in row.split(" ")] for row in s.split("\n")]
-                inputs[i, layer_idx, :, :] = np.array(board_mat)
-                layer_idx += 1
+        for t, fen_t in enumerate(fen_stack):
+            base_plane = t * 14  # 0,14,…,98
+            if fen_t is None:
+                continue  # leave zeros
 
-            # Encode castling rights
-            castling_tensor = np.zeros((8, 8), dtype=np.float32)
-            if board.has_kingside_castling_rights(chess.WHITE):
-                castling_tensor[7, 7] = 1
-            if board.has_queenside_castling_rights(chess.WHITE):
-                castling_tensor[7, 0] = 1
-            if board.has_kingside_castling_rights(chess.BLACK):
-                castling_tensor[0, 7] = -1
-            if board.has_queenside_castling_rights(chess.BLACK):
-                castling_tensor[0, 0] = -1
-            inputs[i, layer_idx, :, :] = castling_tensor
-            layer_idx += 1
+            board_t = chess.Board(fen_t)
 
-            # Encode En Passant
-            en_passant_tensor = np.zeros((8, 8), dtype=np.float32)
-            if board.ep_square is not None:
-                row, col = divmod(board.ep_square, 8)
-                en_passant_tensor[row, col] = 1
-            inputs[i, layer_idx, :, :] = en_passant_tensor
-            layer_idx += 1
+            # --- 12 piece-presence planes  --------------------------------
+            s = str(board_t).replace("\n", " ")
+            squares = np.array(s.split(), dtype="<U1").reshape(8, 8)
 
-        # # Encode repetition
-        # repetition_count = 0
-        # if board.is_repetition(count=1):
-        #     repetition_count = 1
-        # elif board.is_repetition(count=2):
-        #     repetition_count = 2
-        # elif board.is_repetition(count=3):
-        #     repetition_count = 3
-        # elif board.is_repetition(count=4):
-        #     repetition_count = 4
-        # elif board.is_repetition(count=5):
-        #     repetition_count = 5
-        # elif board.is_repetition(count=6):
-        #     repetition_count = 6
-        # elif board.is_repetition(count=7):
-        #     repetition_count = 7
-        # inputs[i, layer_idx, :, :] = np.full((8, 8), repetition_count, dtype=np.float32)
-        # layer_idx += 1
+            for p_idx, symbol in enumerate(piece_symbols):
+                mask = (squares == symbol).astype(np.float32)
+                planes[b_idx, base_plane + p_idx, :, :] = mask
 
-        # Encode turn
-        turn = board.turn
-        if turn == chess.WHITE:
-            inputs[i, layer_idx, :, :] = 1
-        else:
-            inputs[i, layer_idx, :, :] = -1
-        layer_idx += 1
+            # --- repetition planes (only reliable for *current* board) ----
+            if t == 0:
+                if board_t.is_repetition(1):
+                    planes[b_idx, base_plane + 12, :, :] = 1
+                if board_t.is_repetition(2):
+                    planes[b_idx, base_plane + 13, :, :] = 1
 
-        # Encode board
-        inputs[i, layer_idx, :, :] = np.ones((8, 8), dtype=np.float32)
-        layer_idx += 1
+        # ==================================================================
+        # static context (planes 112…118)
+        board0 = chess.Board(fen)  # current board
 
-    return torch.tensor(inputs)
+        planes[b_idx, 112, :, :] = 1.0 if board0.turn == chess.WHITE else 0.0
+
+        planes[b_idx, 113, :, :] = (
+            1.0 if board0.has_kingside_castling_rights(chess.WHITE) else 0.0
+        )
+        planes[b_idx, 114, :, :] = (
+            1.0 if board0.has_queenside_castling_rights(chess.WHITE) else 0.0
+        )
+        planes[b_idx, 115, :, :] = (
+            1.0 if board0.has_kingside_castling_rights(chess.BLACK) else 0.0
+        )
+        planes[b_idx, 116, :, :] = (
+            1.0 if board0.has_queenside_castling_rights(chess.BLACK) else 0.0
+        )
+
+        planes[b_idx, 117, :, :] = board0.fullmove_number / 100.0
+        planes[b_idx, 118, :, :] = board0.halfmove_clock / 100.0
+
+    return torch.tensor(planes)
 
 
 def _encode_eval(evals, scale=400):
@@ -331,25 +314,49 @@ def _get_move_type_index(move: chess.Move) -> int:
     raise ValueError(f"Unclassified move: {move}")
 
 
-def _decode_move(policies, fens):
-    """Convert 73×8×8 policy to UCI moves."""
+def _flat_index_of_move(move: chess.Move) -> int:
+    """
+    Return the flattened index (0-based, 0‥4671) that the policy head uses
+    for `move`.  This lets us look the probability up in a *single* tensor
+    instead of touching three indices.
+    """
+    plane = _get_move_type_index(move)  # 0‥72
+    row = 7 - (move.from_square // 8)  # 0‥7  (network is flipped)
+    col = move.from_square % 8  # 0‥7
+    return plane * 64 + row * 8 + col  # 73 · 8 · 8 = 4672
+
+
+def _decode_move(policies, fens, apply_softmax: bool = True):
+    """
+    Convert a batch of raw network outputs `policies` (Tensor) into
+    *legal* UCI moves by picking the legal move with the highest predicted
+    probability.
+
+    • `policies[i]` is (73,8,8) and may still reside on the GPU.
+    • If `apply_softmax` is True we turn logits → probabilities first;
+      if you already trained with a soft-max head you can leave it False.
+    """
     best_moves = []
-    for policy, fen in zip(policies, fens):
+    for logits, fen in zip(policies, fens):
         board = chess.Board(fen)
         legal_moves = list(board.legal_moves)
-        if not legal_moves:
-            return None
+        if not legal_moves:  # stalemate / checkmate
+            best_moves.append(None)
+            continue
 
-        # Score each legal move using policy
-        move_scores = []
-        for move in legal_moves:
-            plane_idx = _get_move_type_index(move)
-            from_row, from_col = 7 - (move.from_square // 8), move.from_square % 8
-            score = policy[plane_idx, from_row, from_col]
-            move_scores.append(score.item())
+        # Vectorise: flatten once, option-ally soft-max once
+        flat = logits.view(-1)  # shape (4672,)
+        if apply_softmax:
+            flat = torch.softmax(flat, dim=0)
 
-        best_move = legal_moves[np.argmax(move_scores)]
-        best_moves.append(best_move)
+        # Gather probabilities of *only* the legal moves
+        idxs = torch.tensor(
+            [_flat_index_of_move(m) for m in legal_moves], device=flat.device
+        )
+        probs = flat[idxs]  # shape (L,)
+
+        best_moves.append(legal_moves[int(torch.argmax(probs))])
+
     return best_moves
 
 

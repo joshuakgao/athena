@@ -10,6 +10,7 @@ import wandb
 from architecture import Athena, AthenaV2, AthenaV3
 from alphazero_arch import AlphaZeroNet
 from datasets.aegis.dataset import AegisDataset
+import chess
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from utils.logger import logger
@@ -46,10 +47,10 @@ train_loader = DataLoader(
 test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 
 # ─────────────────────────── MODEL ────────────────────────────
-# model = Athena(input_channels=10, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
-# model = AthenaV2(input_channels=10, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
-model = AthenaV3(input_channels=10, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
-# model = AlphaZeroNet(input_channels=10, num_blocks=NUM_RES_BLOCKS).to("cuda")
+# model = Athena(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+# model = AthenaV2(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+model = AthenaV3(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+# model = AlphaZeroNet(input_channels=119, num_blocks=NUM_RES_BLOCKS).to("cuda")
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=LR_DECAY_RATE)
 
@@ -60,26 +61,49 @@ if USE_WANDB:
 
 
 # ─────────────────────────── LOSS ─────────────────────────────
-def loss_function(policy_pred, value_pred, policy_tgt, value_tgt):
-    """For 73×8×8 policy head."""
-    B = policy_pred.size(0)
+def loss_function(
+    policy_logits: torch.Tensor,  # [B, 73, 8, 8]  ← model output
+    value_pred: torch.Tensor,  # [B, 1]         ← model output
+    policy_target,  # one-hot tensor  *or*  list[str|Move]
+    value_tgt: torch.Tensor,  # [B, 1]         ← encoded eval
+    *,
+    w_policy: float = 1.0,
+    w_value: float = 1.0,
+):
+    """
+    Cross-entropy on the single correct move  +  value MSE.
 
-    # Reshape and compute cross-entropy
-    policy_pred = policy_pred.view(B, 73, -1)  # [B,73,64]
-    policy_tgt = policy_tgt.view(B, 73, -1)
-    loss_policy = F.cross_entropy(
-        policy_pred, policy_tgt.argmax(dim=1)  # Target is index of correct move type
-    )
+    • `policy_target` can be
+        – a one-hot tensor of shape [B,73,8,8]  (what your dataloader yields now), or
+        – a list of moves (UCI strings or chess.Move objects).
+    """
+    B = policy_logits.size(0)
+    logits_flat = policy_logits.view(B, -1)  # (B, 4672)
 
-    # Value loss remains same
-    value_pred = value_pred.squeeze(1)
-    value_tgt = value_tgt.squeeze(1)
-    loss_value = F.mse_loss(value_pred, value_tgt)
+    # -------- target index -------------------------------------------------
+    if torch.is_tensor(policy_target):
+        # one-hot → index
+        target_idx = policy_target.view(B, -1).argmax(dim=1)
+    else:
+        # list of moves → index
+        moves = policy_target
+        if isinstance(moves[0], str):  # accept UCI strings
+            moves = [chess.Move.from_uci(m) for m in moves]
+        target_idx = torch.tensor(
+            [aegis.flat_index_of_move(m) for m in moves],
+            device=logits_flat.device,
+            dtype=torch.long,
+        )
 
-    return loss_policy + loss_value, {
-        "policy": loss_policy.detach(),
-        "value": loss_value.detach(),
-    }
+    # -------- losses -------------------------------------------------------
+    loss_policy = F.cross_entropy(logits_flat, target_idx)
+
+    v_pred = value_pred.squeeze(1)
+    v_tgt = value_tgt.squeeze(1)
+    loss_value = F.mse_loss(v_pred, v_tgt)
+
+    loss = w_policy * loss_policy + w_value * loss_value
+    return loss, {"policy": loss_policy.detach(), "value": loss_value.detach()}
 
 
 # ─────────────────────────── EVAL ─────────────────────────────
@@ -124,6 +148,9 @@ def evaluate(model):
                     evals,
                 )
             ):
+                if pred_move is None or target_move is None:
+                    continue
+
                 pred_move = str(pred_move)
                 target_move = str(target_move)
 
