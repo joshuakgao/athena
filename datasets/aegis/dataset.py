@@ -59,8 +59,6 @@ class AegisTrainDataset(Dataset):
         with open(self.metadata_path, "r") as f:
             self.metadata = json.load(f)
 
-        self.sample_dataset()
-
     def sample_dataset(self):
         # Clear existing data
         self.data = pd.DataFrame(columns=["fen", "history", "best_move", "eval"])

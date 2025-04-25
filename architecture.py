@@ -213,3 +213,69 @@ class AthenaV3(nn.Module):
         v = torch.tanh(self.val_fc(v))  # [B,1]
 
         return p, v
+
+
+class AthenaV4(nn.Module):
+    def __init__(self, input_channels=119, width=256, num_blocks=19, device="auto"):
+        super().__init__()
+        self.device = device_selector(device)
+
+        # Normalization - using LayerNorm variants
+        def Norm(c):
+            return nn.LayerNorm(c) if c > 1 else nn.Identity()
+
+        # Input stem with more capacity
+        self.stem = nn.Sequential(
+            nn.Conv2d(input_channels, width, 3, 1, 1, bias=False),
+            Norm(width),
+            nn.Mish(inplace=True),
+            nn.Conv2d(width, width, 3, 1, 1, bias=False),
+            Norm(width),
+            nn.Mish(inplace=True),
+        )
+
+        # Residual tower with squeeze-excitation
+        self.blocks = nn.Sequential(
+            *[
+                SEBlock(width, p_survive=1 - 0.3 * i / num_blocks, norm=Norm)
+                for i in range(num_blocks)
+            ]
+        )
+
+        # Enhanced policy head
+        self.policy_head = nn.Sequential(
+            nn.Conv2d(width, width, 3, 1, 1, bias=False),
+            Norm(width),
+            nn.Mish(inplace=True),
+            nn.Conv2d(width, 73, 1),
+            Norm(73),
+        )
+
+        # Enhanced value head with WDL
+        self.value_head = nn.Sequential(
+            nn.Conv2d(width, width, 1),
+            Norm(width),
+            nn.Mish(inplace=True),
+            nn.AdaptiveAvgPool2d(1),
+            nn.Flatten(),
+            nn.Linear(width, width),
+            nn.Mish(inplace=True),
+            nn.Linear(width, 3),  # WDL output
+        )
+
+        # Optional auxiliary heads
+        self.mobility_head = nn.Linear(width, 1)  # example auxiliary head
+
+    def forward(self, x):
+        x = x.to(self.device)
+        x = self.stem(x)
+        x = self.blocks(x)
+
+        # Policy
+        p = self.policy_head(x)
+
+        # Value
+        v = self.value_head(x)
+
+        # Optional: return auxiliary outputs
+        return p, v

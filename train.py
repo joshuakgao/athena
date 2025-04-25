@@ -193,6 +193,7 @@ logger.info("Training started")
 
 for epoch in range(NUM_EPOCHS):
     model.train()
+    aegis.train_dataset.sample_dataset()  # fresh sample for next epoch
     for step, (X, P_tgt, V_tgt) in enumerate(train_loader):
         X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
 
@@ -236,7 +237,6 @@ for epoch in range(NUM_EPOCHS):
                 logger.info(f"New best model saved ({best_acc:.3%})")
 
     # end‑epoch housekeeping
-    aegis.train_dataset.sample_dataset()  # fresh sample for next epoch
     scheduler.step()
     logger.info(f"End of epoch {epoch+1} – lr is now {scheduler.get_last_lr()[0]:.2e}")
 
