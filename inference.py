@@ -119,7 +119,7 @@ def generate_random_fen():
 def main():
     parser = argparse.ArgumentParser(description="Self-play games with AthenaV2")
     parser.add_argument(
-        "--games", type=int, default=100, help="Number of self-play games to generate"
+        "--games", type=int, default=10, help="Number of self-play games to generate"
     )
     parser.add_argument(
         "--checkpoint", type=str, required=True, help="Path to AthenaV2 .pt checkpoint"

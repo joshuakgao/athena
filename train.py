@@ -161,11 +161,11 @@ def evaluate(model):
                 # Print sample predictions
                 if printed < 20:
                     if pred_move == target_move:
-                        print(
+                        logger.info(
                             f"{fen} {pred_move} {pred_eval:.2f} {target_eval:.2f} ✅ {bot} {elo} {depth}"
                         )
                     else:
-                        print(
+                        logger.info(
                             f"{fen} {pred_move} {target_move} {pred_eval:.2f} {target_eval:.2f} ❌ {bot} {elo} {depth}"
                         )
                     printed += 1
