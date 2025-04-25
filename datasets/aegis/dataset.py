@@ -17,8 +17,8 @@ from utils.chess_utils import column_letter_to_num, is_uci_valid
 
 
 class AegisDataset:
-    def __init__(self, dir="datasets/aegis/data", train_n=10_000_000):
-        self.train_dataset = AegisTrainDataset(dir, n=train_n)
+    def __init__(self, dir="datasets/aegis/data", train_n=10_000_000, no_load=False):
+        self.train_dataset = AegisTrainDataset(dir, n=train_n, no_load=no_load)
         self.test_dataset = AegisTestDataset(dir)
 
     def encode_position(self, fens, histories):
@@ -30,8 +30,8 @@ class AegisDataset:
     def encode_eval(self, evals):
         return _encode_eval(evals)
 
-    def decode_move(self, policies, fens):
-        return _decode_move(policies, fens)
+    def decode_move(self, policies, fens, repetition_penalty=0.9):
+        return _decode_move(policies, fens, repetition_penalty=repetition_penalty)
 
     def decode_eval(self, encoded_evals):
         return _decode_eval(encoded_evals)
@@ -41,7 +41,7 @@ class AegisDataset:
 
 
 class AegisTrainDataset(Dataset):
-    def __init__(self, dir="datasets/aegis/data", n=10_000_000):
+    def __init__(self, dir="datasets/aegis/data", n=10_000_000, no_load=False):
         """
         Args:
             dir: Directory containing the dataset
@@ -58,6 +58,9 @@ class AegisTrainDataset(Dataset):
         # Load metadata
         with open(self.metadata_path, "r") as f:
             self.metadata = json.load(f)
+
+        if not no_load:
+            self.sample_dataset()
 
     def sample_dataset(self):
         # Clear existing data
@@ -324,36 +327,58 @@ def _flat_index_of_move(move: chess.Move) -> int:
     return plane * 64 + row * 8 + col  # 73 · 8 · 8 = 4672
 
 
-def _decode_move(policies, fens, apply_softmax: bool = True):
+def _decode_move(
+    policies, fens, apply_softmax: bool = True, repetition_penalty: float = 0.9
+):
     """
-    Convert a batch of raw network outputs `policies` (Tensor) into
-    *legal* UCI moves by picking the legal move with the highest predicted
-    probability.
+    Convert a batch of raw network outputs `policies` into legal UCI moves,
+    returning both the best move and second-best (ponder) move for each position.
 
-    • `policies[i]` is (73,8,8) and may still reside on the GPU.
-    • If `apply_softmax` is True we turn logits → probabilities first;
-      if you already trained with a soft-max head you can leave it False.
+    Args:
+        policies: Tensor of shape (batch_size, 73, 8, 8) - network policy outputs
+        fens: List of FEN strings for each position in the batch
+        apply_softmax: Whether to apply softmax to convert logits to probabilities
+        repetition_penalty: Factor to penalize moves that lead to repetition (1.0 = no penalty)
+
+    Returns:
+        List of tuples: (best_move, ponder_move) for each position
+                       (None, None) if no legal moves
     """
     best_moves = []
     for logits, fen in zip(policies, fens):
         board = chess.Board(fen)
         legal_moves = list(board.legal_moves)
         if not legal_moves:  # stalemate / checkmate
-            best_moves.append(None)
+            best_moves.append((None, None))
             continue
 
-        # Vectorise: flatten once, option-ally soft-max once
+        # Vectorise: flatten once, optionally soft-max once
         flat = logits.view(-1)  # shape (4672,)
         if apply_softmax:
             flat = torch.softmax(flat, dim=0)
 
-        # Gather probabilities of *only* the legal moves
+        # Get indices and original probabilities for legal moves
         idxs = torch.tensor(
             [_flat_index_of_move(m) for m in legal_moves], device=flat.device
         )
-        probs = flat[idxs]  # shape (L,)
+        probs = flat[idxs].clone()  # shape (L,)
 
-        best_moves.append(legal_moves[int(torch.argmax(probs))])
+        # Apply repetition penalty
+        if repetition_penalty < 1.0:
+            for i, move in enumerate(legal_moves):
+                board.push(move)
+                if board.is_repetition(2):  # Would this move cause repetition?
+                    probs[i] *= repetition_penalty
+                board.pop()
+
+        # Get top moves - handle cases with only 1 legal move
+        k = min(2, len(legal_moves))
+        top_indices = torch.topk(probs, k=k).indices
+
+        best_move = legal_moves[int(top_indices[0])]
+        ponder_move = legal_moves[int(top_indices[1])] if k > 1 else None
+
+        best_moves.append((best_move, ponder_move))
 
     return best_moves
 

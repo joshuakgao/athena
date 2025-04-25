@@ -111,7 +111,7 @@ class Block(nn.Module):
 class AthenaV2(nn.Module):
     def __init__(self, input_channels=10, width=256, num_res_blocks=30, device="auto"):
         super().__init__()
-        self.device = device_selector(device, label="AthenaV2")
+        self.device = device_selector(device, label="AthenaV3")
 
         if num_res_blocks > 25:
 
@@ -216,66 +216,73 @@ class AthenaV3(nn.Module):
 
 
 class AthenaV4(nn.Module):
-    def __init__(self, input_channels=119, width=256, num_blocks=19, device="auto"):
+    def __init__(
+        self,
+        input_channels=10,
+        width=256,
+        num_res_blocks=30,
+        device="auto",
+        dropout_rate=0.1,
+    ):
         super().__init__()
-        self.device = device_selector(device)
+        self.device = device_selector(device, label="AthenaV4")
+        self.dropout_rate = dropout_rate
 
-        # Normalization - using LayerNorm variants
-        def Norm(c):
-            return nn.LayerNorm(c) if c > 1 else nn.Identity()
+        # Normalization selection
+        if num_res_blocks > 25:
 
-        # Input stem with more capacity
+            def Norm(c, groups=32):
+                g = groups if c % groups == 0 else 1
+                return nn.GroupNorm(g, c)
+
+        else:
+
+            def Norm(c):
+                return nn.BatchNorm2d(c)
+
+        # Input stem with dropout
         self.stem = nn.Sequential(
             nn.Conv2d(input_channels, width, 3, 1, 1, bias=False),
             Norm(width),
-            nn.Mish(inplace=True),
-            nn.Conv2d(width, width, 3, 1, 1, bias=False),
-            Norm(width),
-            nn.Mish(inplace=True),
+            nn.ReLU(inplace=True),
+            nn.Dropout2d(p=self.dropout_rate),  # Added dropout
         )
 
-        # Residual tower with squeeze-excitation
-        self.blocks = nn.Sequential(
+        # Residual tower
+        self.body = nn.Sequential(
             *[
-                SEBlock(width, p_survive=1 - 0.3 * i / num_blocks, norm=Norm)
-                for i in range(num_blocks)
+                Block(width, p_survive=1 - 0.5 * i / num_res_blocks, norm=Norm)
+                for i in range(num_res_blocks)
             ]
         )
 
-        # Enhanced policy head
-        self.policy_head = nn.Sequential(
-            nn.Conv2d(width, width, 3, 1, 1, bias=False),
-            Norm(width),
-            nn.Mish(inplace=True),
-            nn.Conv2d(width, 73, 1),
-            Norm(73),
-        )
+        # Policy head (now outputs 73 channels)
+        self.pol_conv = nn.Conv2d(width, 73, 1)  # Changed from 2 to 73
+        self.pol_norm = Norm(73)
+        self.pol_dropout = nn.Dropout2d(p=self.dropout_rate)  # Added dropout
 
-        # Enhanced value head with WDL
-        self.value_head = nn.Sequential(
-            nn.Conv2d(width, width, 1),
-            Norm(width),
-            nn.Mish(inplace=True),
-            nn.AdaptiveAvgPool2d(1),
-            nn.Flatten(),
-            nn.Linear(width, width),
-            nn.Mish(inplace=True),
-            nn.Linear(width, 3),  # WDL output
-        )
-
-        # Optional auxiliary heads
-        self.mobility_head = nn.Linear(width, 1)  # example auxiliary head
+        # Value head (unchanged)
+        self.val_conv = nn.Conv2d(width, 1, 1)
+        self.val_norm = Norm(1)
+        self.val_dropout = nn.Dropout2d(p=self.dropout_rate)  # Added dropout
+        self.val_fc = nn.Linear(1, 1)
+        self.val_fc_dropout = nn.Dropout(
+            p=self.dropout_rate
+        )  # Added dropout for FC layer
 
     def forward(self, x):
         x = x.to(self.device)
-        x = self.stem(x)
-        x = self.blocks(x)
+        x = self.body(self.stem(x))
 
-        # Policy
-        p = self.policy_head(x)
+        # Policy head
+        p = F.relu(self.pol_norm(self.pol_conv(x)))  # [B,73,8,8]
+        p = self.pol_dropout(p)  # Apply dropout
 
-        # Value
-        v = self.value_head(x)
+        # Value head
+        v = F.relu(self.val_norm(self.val_conv(x)))
+        v = self.val_dropout(v)  # Apply dropout
+        v = F.adaptive_avg_pool2d(v, 1).view(x.size(0), 1)
+        v = self.val_fc_dropout(v)  # Apply dropout before FC
+        v = torch.tanh(self.val_fc(v))  # [B,1]
 
-        # Optional: return auxiliary outputs
         return p, v

@@ -107,26 +107,62 @@ def loss_function(
 
 
 # ─────────────────────────── EVAL ─────────────────────────────
-def evaluate(model):
+def evaluate(model, repetition_penalty=0.9):
+    """
+    Enhanced evaluation function with:
+    - Ponder move analysis
+    - Repetition avoidance
+    - Detailed move statistics
+    - Better logging
+    """
     model.eval()
-    total_loss = total_correct = total = total_v_mse = 0
-    printed = 0  # Counter for printed examples
+    metrics = {
+        "total": 0,
+        "correct": 0,
+        "top2_correct": 0,  # Count if correct move is in top 2
+        "value_mse": 0.0,
+        "total_loss": 0.0,
+        "repetition_avoided": 0,
+    }
+
+    printed_samples = 0
+    max_samples_to_print = 20
 
     with torch.no_grad():
-        for X, P_tgt, V_tgt, fens, bots, depths, elos, evals in test_loader:
+        for batch in test_loader:
+            X, P_tgt, V_tgt, fens, bots, depths, elos, evals = batch
             X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
             P_pred, V_pred = model(X)
 
+            # Calculate loss
             loss, _ = loss_function(P_pred, V_pred, P_tgt, V_tgt)
-            bs = X.size(0)
-            total_loss += loss.item() * bs
+            batch_size = X.size(0)
+            metrics["total_loss"] += loss.item() * batch_size
 
-            # Get predicted and target moves
-            pred_moves = aegis.decode_move(P_pred, fens)
-            target_moves = aegis.decode_move(P_tgt, fens)
+            # Get predicted moves (best + ponder)
+            pred_moves = aegis.decode_move(
+                P_pred, fens, repetition_penalty=repetition_penalty
+            )
+
+            # Get target moves (convert from tensor to moves)
+            target_moves = []
+            for i in range(P_tgt.size(0)):
+                # Convert one-hot tensor to move
+                flat_tgt = P_tgt[i].view(-1)
+                target_idx = flat_tgt.argmax().item()
+                target_move = None
+                try:
+                    board = chess.Board(fens[i])
+                    for move in board.legal_moves:
+                        if aegis.flat_index_of_move(move) == target_idx:
+                            target_move = move
+                            break
+                except:
+                    pass
+                target_moves.append(target_move)
 
             for i, (
-                pred_move,
+                (best_move, ponder_move),
                 target_move,
                 eval_pred,
                 eval_tgt,
@@ -148,43 +184,85 @@ def evaluate(model):
                     evals,
                 )
             ):
-                if pred_move is None or target_move is None:
+                if best_move is None or target_move is None:
                     continue
 
-                pred_move = str(pred_move)
-                target_move = str(target_move)
+                # Convert to strings for comparison
+                best_move_str = str(best_move)
+                target_move_str = str(target_move)
+                ponder_move_str = str(ponder_move) if ponder_move else None
 
                 # Decode evaluations
                 pred_eval = aegis.decode_eval([eval_pred])[0]
                 target_eval = aegis.decode_eval([eval_tgt])[0]
 
-                # Print sample predictions
-                if printed < 20:
-                    if pred_move == target_move:
-                        logger.info(
-                            f"{fen} {pred_move} {pred_eval:.2f} {target_eval:.2f} ✅ {bot} {elo} {depth}"
-                        )
-                    else:
-                        logger.info(
-                            f"{fen} {pred_move} {target_move} {pred_eval:.2f} {target_eval:.2f} ❌ {bot} {elo} {depth}"
-                        )
-                    printed += 1
+                # Check for repetition avoidance
+                board = chess.Board(fen)
+                board.push(best_move)
+                avoided_repetition = board.is_repetition(2)
+                board.pop()
+                if avoided_repetition:
+                    metrics["repetition_avoided"] += 1
 
-                # Count correct predictions (full move match)
-                total_correct += pred_move == target_move
+                # Update statistics
+                metrics["correct"] += best_move_str == target_move_str
+                metrics["top2_correct"] += (best_move_str == target_move_str) or (
+                    ponder_move_str and ponder_move_str == target_move_str
+                )
+                metrics["total"] += 1
+
+                # Print sample predictions
+                if printed_samples < max_samples_to_print:
+                    status = "✅" if best_move_str == target_move_str else "❌"
+                    top2_status = (
+                        "(top2)"
+                        if ponder_move_str and ponder_move_str == target_move_str
+                        else ""
+                    )
+
+                    logger.info(
+                        f"FEN: {fen}\n"
+                        f"Move: {best_move_str} {status} {top2_status}\n"
+                        f"Target: {target_move_str}\n"
+                        f"Ponder: {ponder_move_str}\n"
+                        f"Eval: {pred_eval:.2f} vs {target_eval:.2f}\n"
+                        f"Bot: {bot} ELO: {elo} Depth: {depth}\n"
+                        f"{'-'*40}"
+                    )
+                    printed_samples += 1
 
             # Value loss calculation
             v_pred = V_pred.squeeze(1)
             v_tgt = V_tgt.squeeze(1)
-            total_v_mse += F.mse_loss(v_pred, v_tgt, reduction="sum").item()
+            metrics["value_mse"] += F.mse_loss(v_pred, v_tgt, reduction="sum").item()
 
-            total += bs
+    # Final metrics calculation
+    if metrics["total"] > 0:
+        results = {
+            "eval_loss": metrics["total_loss"] / metrics["total"],
+            "eval_value_loss": metrics["value_mse"] / metrics["total"],
+            "eval_accuracy": metrics["correct"] / metrics["total"],
+            "top2_accuracy": metrics["top2_correct"] / metrics["total"],
+            "repetition_avoidance_rate": metrics["repetition_avoided"]
+            / metrics["total"],
+        }
+    else:
+        results = {
+            k: 0.0
+            for k in [
+                "eval_loss",
+                "eval_value_loss",
+                "eval_accuracy",
+                "top2_accuracy",
+                "repetition_avoidance_rate",
+            ]
+        }
 
-    return {
-        "eval_loss": total_loss / total,
-        "eval_value_loss": total_v_mse / total,
-        "eval_accuracy": total_correct / total,  # Full move accuracy
-    }
+    logger.info("\nEvaluation Results:")
+    for k, v in results.items():
+        logger.info(f"{k:>25}: {v:.4f}")
+
+    return results
 
 
 # ─────────────────────────── TRAIN ────────────────────────────
@@ -193,7 +271,6 @@ logger.info("Training started")
 
 for epoch in range(NUM_EPOCHS):
     model.train()
-    aegis.train_dataset.sample_dataset()  # fresh sample for next epoch
     for step, (X, P_tgt, V_tgt) in enumerate(train_loader):
         X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
 
@@ -238,6 +315,7 @@ for epoch in range(NUM_EPOCHS):
 
     # end‑epoch housekeeping
     scheduler.step()
+    aegis.train_dataset.sample_dataset()  # fresh sample for next epoch
     logger.info(f"End of epoch {epoch+1} – lr is now {scheduler.get_last_lr()[0]:.2e}")
 
 
