@@ -286,3 +286,61 @@ class AthenaV4(nn.Module):
         v = torch.tanh(self.val_fc(v))  # [B,1]
 
         return p, v
+
+
+class AthenaV5(nn.Module):
+    def __init__(self, input_channels=119, width=256, num_res_blocks=20, device="auto"):
+        super().__init__()
+        self.device = device_selector(device, label="AthenaV5")
+
+        # Constants
+        self.input_channels = input_channels
+        self.width = width
+        self.num_res_blocks = num_res_blocks
+        self.board_size = 8
+        self.policy_head_size = 73 * 8 * 8  # For 73 move types policy head
+        self.value_head_size = 1
+
+        # Initial convolution block
+        self.conv_block = nn.Sequential(
+            nn.Conv2d(self.input_channels, self.width, kernel_size=3, padding=1),
+            nn.BatchNorm2d(self.width),
+            nn.ReLU(),
+        ).to(self.device)
+
+        # Residual tower using the improved Block class from V4
+        self.residual_tower = nn.Sequential(
+            *[
+                Block(self.width, norm=nn.BatchNorm2d)
+                for _ in range(self.num_res_blocks)
+            ]
+        ).to(self.device)
+
+        # Policy head (outputs 73 channels for move types)
+        self.policy_head = nn.Sequential(
+            nn.Conv2d(self.width, 73, kernel_size=1),
+            nn.BatchNorm2d(73),
+            nn.ReLU(),
+        ).to(self.device)
+
+        # Value head
+        self.value_head = nn.Sequential(
+            nn.Conv2d(self.width, 1, kernel_size=1),
+            nn.BatchNorm2d(1),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(self.board_size * self.board_size, 256),
+            nn.ReLU(),
+            nn.Linear(256, self.value_head_size),
+            nn.Tanh(),
+        ).to(self.device)
+
+    def forward(self, x):
+        x = x.to(self.device)
+        x = self.conv_block(x)
+        x = self.residual_tower(x)
+
+        policy = self.policy_head(x)  # [B, 73, 8, 8]
+        value = self.value_head(x)  # [B, 1]
+
+        return policy, value

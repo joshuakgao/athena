@@ -49,7 +49,7 @@ test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 # ─────────────────────────── MODEL ────────────────────────────
 # model = Athena(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
 # model = AthenaV2(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
-model = AthenaV3(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
+model = AthenaV4(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
 # model = AlphaZeroNet(input_channels=119, num_blocks=NUM_RES_BLOCKS).to("cuda")
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=LR_DECAY_RATE)
@@ -282,7 +282,7 @@ for epoch in range(NUM_EPOCHS):
         optimizer.step()
 
         # ----- quick logs -----
-        if step % CHECK_METRICS_INT == 0:
+        if step % CHECK_METRICS_INT == 0 and step > 0:
             lr = scheduler.get_last_lr()[0]
             logger.info(
                 f"{epoch+1}: {step}/{iters_per_epoch}    loss: {loss:.4f}    policy_loss {parts['policy']:.4f}    value_loss: {parts['value']:.4f}    lr: {lr:.2e}"
@@ -298,7 +298,7 @@ for epoch in range(NUM_EPOCHS):
                 )
 
         # ----- periodic evaluation -----
-        if step % EVAL_MODEL_INT == 0:
+        if step % EVAL_MODEL_INT == 0 and step > 0:
             metrics = evaluate(model)
             logger.info(
                 f"eval_loss: {metrics['eval_loss']:.4f}    eval_value_loss: {metrics['eval_value_loss']:.4f}    ACCURACY:{metrics['eval_accuracy']:.3%}"
