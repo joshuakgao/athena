@@ -1,30 +1,32 @@
 import json
 import os
+import re
 import sys
 from pathlib import Path
+
 import chess
 import chess.pgn
-import psutil
-from tqdm import tqdm
-import re
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
-from utils.chess_utils import is_fen_valid
 from utils.logger import logger
 
 raw_dir = "datasets/aegis/raw_data"
 dir = "datasets/aegis/data"
+MAX_NUM_POSITIONS = 50_000_000
 
 
-def write_data_to_file(data, output_dir, file_index):
-    """Write data to JSONL file and clear memory."""
-    output_path = output_dir / f"shard_{file_index:04d}.jsonl"
-    with open(output_path, "w") as f:
-        for fen, move_data in data.items():
-            json.dump({fen: move_data["best_move"]}, f)
-            f.write("\n")
-    logger.info(f"Created {output_path} with {len(data)} positions")
-    return file_index + 1
+def write_data_to_file(data, output_dir):
+    """Write data to JSONL shards"""
+    shard_size = 1_000_000
+    items = list(data.items())
+    for i in range(0, len(items), shard_size):
+        shard = items[i : i + shard_size]
+        output_path = output_dir / f"aegis_{i // shard_size:04d}.jsonl"
+        with open(output_path, "w") as f:
+            for fen, move_data in shard:
+                json.dump({fen: move_data}, f)
+                f.write("\n")
+        logger.info(f"Created {output_path} with {len(shard)} positions")
 
 
 def extract_eval_and_depth(comment):
@@ -60,11 +62,9 @@ def process_game(game, data):
 
 
 def generate():
-    """Process PGN files and create JSONL shards."""
     data = {}
     output_dir = Path(dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-    file_index = 0
 
     pgn_files = sorted(
         Path(raw_dir).glob("*.pgn"),
@@ -76,51 +76,18 @@ def generate():
     )
 
     for pgn_path in pgn_files:
-        file_size = pgn_path.stat().st_size
-        logger.info(f"Processing {pgn_path.name} ({file_size/1024/1024:.2f} MB)")
-
-        game_counter = 0  # Initialize a counter for games
-
         with open(pgn_path, "r") as pgn_file:
-            with tqdm(
-                total=file_size, unit="B", unit_scale=True, desc=pgn_path.name
-            ) as pbar:
-                while True:
-                    start_pos = pgn_file.tell()
-                    game = chess.pgn.read_game(pgn_file)
-                    if game is None:
-                        break
+            while True:
+                game = chess.pgn.read_game(pgn_file)
+                if game is None:
+                    break
 
-                    process_game(game, data)
-                    pbar.update(pgn_file.tell() - start_pos)
+                process_game(game, data)
 
-                    game_counter += 1  # Increment the game counter
-
-                    # Log memory usage every 1000 games
-                    if game_counter % 10000 == 0:
-                        memory = psutil.virtual_memory()
-                        logger.info(
-                            f"Processed {game_counter} games. Memory usage: {memory.percent}%"
-                        )
-
-                    # Check memory usage and write data if memory is above 90%
-                    memory = psutil.virtual_memory()
-                    if memory.percent > 95:
-                        logger.warning(
-                            f"Memory usage is high ({memory.percent}%). Writing data to disk..."
-                        )
-                        file_index = write_data_to_file(data, output_dir, file_index)
-                        data.clear()  # Clear the data dictionary to free memory
-
-        # Log memory usage after processing the file
-        memory = psutil.virtual_memory()
-        logger.info(f"Memory usage after processing {pgn_path.name}: {memory.percent}%")
-
-    # Write remaining data
-    if data:
-        file_index = write_data_to_file(data, output_dir, file_index)
-
-    logger.info("Processing complete")
+                if len(data) >= MAX_NUM_POSITIONS:
+                    data = dict(list(data.items())[:MAX_NUM_POSITIONS])
+                    write_data_to_file(data, output_dir)
+                    return
 
 
 if __name__ == "__main__":
