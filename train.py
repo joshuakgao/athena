@@ -50,7 +50,7 @@ test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
 # ─────────────────────────── MODEL ────────────────────────────
 # model = Athena(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
 # model = AthenaV2(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
-model = AthenaV2(input_channels=119, width=WIDTH, num_res_blocks=NUM_RES_BLOCKS).to(
+model = AthenaV3(input_channels=119, width=WIDTH, num_res_blocks=NUM_RES_BLOCKS).to(
     "cuda"
 )
 # model = AlphaZeroNet(input_channels=119, num_blocks=NUM_RES_BLOCKS).to("cuda")
