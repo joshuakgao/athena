@@ -6,6 +6,7 @@ import chess
 import chess.pgn
 import numpy as np
 import torch
+from tqdm import tqdm
 from torch.utils.data import Dataset
 
 from utils.chess_utils import column_letter_to_num, is_fen_valid, is_uci_valid
@@ -22,7 +23,7 @@ class AegisDataset(Dataset):
         self.data = []
         for file_path in self.files:
             with open(file_path, "r") as f:
-                for line in f:
+                for line in tqdm(f):
                     data = json.loads(line.strip())
                     fen = list(data.keys())[0]
                     move = data[fen]
