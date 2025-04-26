@@ -1,13 +1,14 @@
 import json
 import os
 
+import chess
 import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, random_split
 from tqdm import tqdm
 
 import wandb
-from architecture import Athena
+from architecture import Athena, AthenaV6
 from datasets.aegis.dataset import AegisDataset
 from utils.logger import logger
 
@@ -25,11 +26,11 @@ with open("train_config.json", "r") as f:
 
 
 # Create the dataset and split it into training and testing sets
-dataset = AegisDataset()
-dataset_size = len(dataset)
+aegis = AegisDataset()
+dataset_size = len(aegis)
 test_size = int(TEST_SPLIT_RATIO * dataset_size)
 train_size = dataset_size - test_size
-iters_in_an_epoch = max(len(dataset) // BATCH_SIZE, 1)
+iters_in_an_epoch = max(len(aegis) // BATCH_SIZE, 1)
 EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 10, 1)
 CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 100, 1)
 LR_DECAY_STEPS = iters_in_an_epoch
@@ -39,7 +40,7 @@ logger.info(
     f"Dataset size: {dataset_size}, Train size: {train_size}, Test size: {test_size}"
 )
 
-train_dataset, test_dataset = random_split(dataset, [train_size, test_size])
+train_dataset, test_dataset = random_split(aegis, [train_size, test_size])
 
 # Create DataLoaders for training and testing
 train_dataloader = DataLoader(
@@ -48,7 +49,7 @@ train_dataloader = DataLoader(
 test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
 # Create the model, loss function, and optimizer
-model = Athena(input_channels=9, num_res_blocks=NUM_RES_BLOCKS)
+model = AthenaV6(input_channels=21, num_res_blocks=NUM_RES_BLOCKS)
 model.to(model.device)
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(
@@ -64,69 +65,130 @@ if USE_WANDB:
     wandb.watch(model)
 
 
-def loss_function(pred, target):
-    batch_size = pred.shape[0]
+def loss_function(
+    policy_logits: torch.Tensor,  # [B, 73, 8, 8]  ← model output
+    policy_target,  # one-hot tensor  *or*  list[str|Move]
+):
+    """
+    Cross-entropy on the single correct move  +  value MSE.
 
-    from_indices = target[:, 0, :, :].view(batch_size, -1)
-    to_indices = target[:, 1, :, :].view(batch_size, -1)
+    • `policy_target` can be
+        – a one-hot tensor of shape [B,73,8,8]  (what your dataloader yields now), or
+        – a list of moves (UCI strings or chess.Move objects).
+    """
+    B = policy_logits.size(0)
+    logits_flat = policy_logits.view(B, -1)  # (B, 4672)
 
-    # Extract "from" and "to" logits
-    from_logits = pred[:, 0, :, :].view(batch_size, -1)  # [batch, 64]
-    to_logits = pred[:, 1, :, :].view(batch_size, -1)  # [batch, 64]
+    # -------- target index -------------------------------------------------
+    if torch.is_tensor(policy_target):
+        # one-hot → index
+        target_idx = policy_target.view(B, -1).argmax(dim=1)
+    else:
+        # list of moves → index
+        moves = policy_target
+        if isinstance(moves[0], str):  # accept UCI strings
+            moves = [chess.Move.from_uci(m) for m in moves]
+        target_idx = torch.tensor(
+            [aegis.flat_index_of_move(m) for m in moves],
+            device=logits_flat.device,
+            dtype=torch.long,
+        )
 
-    # Compute cross-entropy for "from" and "to" separately
-    loss_from = F.cross_entropy(from_logits, from_indices)
-    loss_to = F.cross_entropy(to_logits, to_indices)
+    # -------- losses -------------------------------------------------------
+    loss_policy = F.cross_entropy(logits_flat, target_idx)
 
-    # Average the two losses
-    loss = (loss_from + loss_to) / 2
-    return loss
+    return loss_policy
 
 
-def eval_model(model, test_dataloader):
+def evaluate(repetition_penalty=0.9):
+    """
+    Enhanced evaluation function with:
+    - Ponder move analysis
+    - Repetition avoidance
+    - Detailed move statistics
+    - Better logging
+    """
     model.eval()
-    total_from_correct = 0
-    total_to_correct = 0
-    total_samples = 0
-    total_loss = 0
+    metrics = {
+        "total": 0,
+        "correct": 0,
+        "top2_correct": 0,  # Count if correct move is in top 2
+        "total_loss": 0.0,
+    }
+
+    printed_samples = 0
+    max_samples_to_print = 20
 
     with torch.no_grad():
-        for X, Y in test_dataloader:
-            batch_size = X.size(0)  # Get actual batch size for this batch
+        for X, Y, fens, best_moves in test_dataloader:
             X = X.to(model.device)
             Y = Y.to(model.device)
+            preds = model(X)
 
-            # Forward pass
-            pred = model(X)
+            # Calculate loss
+            loss = loss_function(preds, Y)
+            batch_size = X.size(0)
+            metrics["total_loss"] += loss.item() * batch_size
 
-            # Compute loss
-            loss = loss_function(pred, Y)
-            total_loss += loss.item() * batch_size
+            # Decode predicted moves
+            pred_moves = aegis.decode_move(
+                preds, fens, repetition_penalty=repetition_penalty
+            )
 
-            # Get predictions
-            from_pred = pred[:, 0, :, :].view(batch_size, -1).argmax(dim=1)
-            to_pred = pred[:, 1, :, :].view(batch_size, -1).argmax(dim=1)
+            # Decode target moves
+            target_moves = [
+                aegis.decode_move(Y[i].unsqueeze(0), [fens[i]])[0][0]
+                for i in range(batch_size)
+            ]
 
-            # Get targets
-            from_target = Y[:, 0, :, :].view(batch_size, -1).argmax(dim=1)
-            to_target = Y[:, 1, :, :].view(batch_size, -1).argmax(dim=1)
+            for i, ((best_move, ponder_move), target_move, fen) in enumerate(
+                zip(pred_moves, target_moves, fens)
+            ):
+                if best_move is None or target_move is None:
+                    continue
 
-            # Update correct counts
-            total_from_correct += (from_pred == from_target).sum().item()
-            total_to_correct += (to_pred == to_target).sum().item()
-            total_samples += batch_size
+                # Convert to strings for comparison
+                best_move_str = str(best_move)
+                target_move_str = str(target_move)
+                ponder_move_str = str(ponder_move) if ponder_move else None
 
-    avg_loss = total_loss / total_samples
-    from_accuracy = total_from_correct / total_samples
-    to_accuracy = total_to_correct / total_samples
-    overall_accuracy = (total_from_correct + total_to_correct) / (2 * total_samples)
+                # Update statistics
+                metrics["correct"] += best_move_str == target_move_str
+                metrics["top2_correct"] += (best_move_str == target_move_str) or (
+                    ponder_move_str and ponder_move_str == target_move_str
+                )
+                metrics["total"] += 1
 
-    return {
-        "loss": avg_loss,
-        "from_accuracy": from_accuracy,
-        "to_accuracy": to_accuracy,
-        "overall_accuracy": overall_accuracy,
+                # Print sample predictions
+                if printed_samples < max_samples_to_print:
+                    status = "✅" if best_move_str == target_move_str else "❌"
+                    top2_status = (
+                        "(top2)"
+                        if ponder_move_str and ponder_move_str == target_move_str
+                        else ""
+                    )
+
+                    logger.info(
+                        f"FEN: {fen}\n"
+                        f"Move: {best_move_str} {status} {top2_status}\n"
+                        f"Target: {target_move_str}\n"
+                        f"Ponder: {ponder_move_str}\n"
+                        f"{'-'*40}"
+                    )
+                    printed_samples += 1
+
+    # Final metrics calculation
+    results = {
+        "eval_loss": metrics["total_loss"] / metrics["total"],
+        "eval_accuracy": metrics["correct"] / metrics["total"],
+        "top2_accuracy": metrics["top2_correct"] / metrics["total"],
     }
+
+    logger.info("\nEvaluation Results:")
+    for k, v in results.items():
+        logger.info(f"{k:>25}: {v:.4f}")
+
+    return results
 
 
 # Training loop
@@ -142,7 +204,7 @@ for epoch in tqdm(range(NUM_EPOCHS)):
     # Set model to training mode
     model.train()
 
-    for batch_idx, (X, Y) in enumerate(train_dataloader):
+    for batch_idx, (X, Y, fens, best_moves) in enumerate(train_dataloader):
         # Move data to device
         X = X.to(model.device)
         Y = Y.to(model.device)
@@ -157,10 +219,10 @@ for epoch in tqdm(range(NUM_EPOCHS)):
         optimizer.zero_grad()
         loss.backward()
         optimizer.step()
-        scheduler.step()
 
         # Log metrics
         if batch_idx % CHECK_METRICS_INTERVAL == CHECK_METRICS_INTERVAL - 1:
+            lr = scheduler.get_last_lr()[0]
             logger.info(
                 f"Epoch [{epoch + 1}/{NUM_EPOCHS}], Batch [{batch_idx + 1}/{len(train_dataloader)}], Loss: {loss:.4f}"
             )
@@ -168,35 +230,33 @@ for epoch in tqdm(range(NUM_EPOCHS)):
                 wandb.log(
                     {
                         "train_loss": loss.item(),
-                        "learning_rate": scheduler.get_last_lr()[0],
+                        "learning_rate": lr,
                     }
                 )
 
         # Evaluate model periodically
         if batch_idx % EVAL_MODEL_INTERVAL == EVAL_MODEL_INTERVAL - 1:
-            eval_metrics = eval_model(model, test_dataloader)
+            eval_metrics = evaluate()
             logger.info(
-                f"Evaluation - Loss: {eval_metrics['loss']:.4f}, "
-                f"From Accuracy: {eval_metrics['from_accuracy']:.4f}, "
-                f"To Accuracy: {eval_metrics['to_accuracy']:.4f}, "
-                f"Overall Accuracy: {eval_metrics['overall_accuracy']:.4f}"
+                f"eval_loss: {eval_metrics['eval_loss']:.4f}    top2_accuracy: {eval_metrics['top2_accuracy']:.3%}   ACCURACY:{eval_metrics['eval_accuracy']:.3%}"
             )
 
             if USE_WANDB:
                 wandb.log(
                     {
-                        "eval_loss": eval_metrics["loss"],
-                        "eval_from_accuracy": eval_metrics["from_accuracy"],
-                        "eval_to_accuracy": eval_metrics["to_accuracy"],
-                        "eval_overall_accuracy": eval_metrics["overall_accuracy"],
+                        "eval_loss": eval_metrics["eval_loss"],
+                        "eval_accuracy": eval_metrics["eval_accuracy"],
+                        "top2_accuracy": eval_metrics["top2_accuracy"],
                     }
                 )
 
-            # Save best model
-            if eval_metrics["overall_accuracy"] > best_accuracy:
-                best_accuracy = eval_metrics["overall_accuracy"]
-                torch.save(model.state_dict(), f"{save_dir}/best_model_{MODEL_NAME}.pt")
-                logger.info(f"New best model saved with accuracy {best_accuracy:.4f}")
+            if eval_metrics["eval_accuracy"] > best_accuracy:
+                best_accuracy = eval_metrics["eval_accuracy"]
+                os.makedirs("checkpoints", exist_ok=True)
+                torch.save(model.state_dict(), f"checkpoints/{MODEL_NAME}.pt")
+                logger.info(f"New best model saved ({best_accuracy:.3%})")
+
+    scheduler.step()
 
     # Log epoch-level metrics
     if USE_WANDB:
