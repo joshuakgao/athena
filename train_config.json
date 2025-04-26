@@ -3,9 +3,9 @@
     "description": "Learning rate 0.00006",
     "num_epochs": 100,
     "lr": 0.00006,
-    "lr_decay_rate": 0.95,
+    "lr_decay_rate": 0.99,
     "batch_size": 256,
-    "test_split_ratio": 0.01,
+    "test_split_ratio": 0.0001,
     "use_wandb": true,
     "num_res_blocks": 19
 }
