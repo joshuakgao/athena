@@ -1,9 +1,14 @@
 import json
+import os
+import sys
 from pathlib import Path
-
 import chess
 import chess.pgn
+import psutil
+from tqdm import tqdm
+import re
 
+sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from utils.chess_utils import is_fen_valid
 from utils.logger import logger
 
@@ -11,72 +16,112 @@ raw_dir = "datasets/aegis/raw_data"
 dir = "datasets/aegis/data"
 
 
+def write_data_to_file(data, output_dir, file_index):
+    """Write data to JSONL file and clear memory."""
+    output_path = output_dir / f"shard_{file_index:04d}.jsonl"
+    with open(output_path, "w") as f:
+        for fen, move_data in data.items():
+            json.dump({fen: move_data["best_move"]}, f)
+            f.write("\n")
+    logger.info(f"Created {output_path} with {len(data)} positions")
+    return file_index + 1
+
+
+def extract_eval_and_depth(comment):
+    """Extract evaluation and depth from PGN comment."""
+    match = re.search(r"([+-]?\d+(\.\d+)?)/(\d+)", comment)
+    if match:
+        eval_str = match.group(1)
+        depth = int(match.group(3))
+        eval_cp = int(float(eval_str) * 100)
+        return eval_cp, depth
+    return None, None
+
+
+def process_game(game, data):
+    """Process a single game and update the data dictionary."""
+    board = game.board()
+
+    for node in game.mainline():
+        fen = board.fen()
+        move = node.move
+
+        if move not in board.legal_moves:
+            logger.warning(f"Illegal move: {move} in FEN: {fen}")
+            continue
+
+        board.push(move)
+        next_move_uci = move.uci()
+        comment = node.comment
+        depth = extract_eval_and_depth(comment)[1] or 0
+
+        if fen not in data or depth > data[fen].get("depth", 0):
+            data[fen] = {"best_move": next_move_uci, "depth": depth}
+
+
 def generate():
-    """
-    Process all PGN files in the directory and create a separate JSONL file for each PGN.
-    """
+    """Process PGN files and create JSONL shards."""
     data = {}
-
-    # Process each PGN file in the directory
-    for pgn_path in Path(raw_dir).glob("*.pgn"):
-        logger.info(f"Processing {pgn_path.name}...")
-
-        with open(pgn_path) as pgn_file:
-            while True:
-                game = chess.pgn.read_game(pgn_file)
-                if game is None:
-                    break  # End of file
-
-                # default set to Lc0 0.27.0 elo
-                white_elo = game.headers.get("WhiteElo", 3404)
-                black_elo = game.headers.get("BlackElo", 3404)
-                board = game.board()
-
-                for move in game.mainline_moves():
-                    # Get the FEN before the move is made
-                    fen = board.fen()
-                    # Make the move on the board
-                    board.push(move)
-
-                    if not is_fen_valid(fen):
-                        continue
-
-                    # Get the next move in UCI format
-                    next_move_uci = move.uci()
-                    active_color = fen.split()[1]  # Second field is the active color
-                    elo = white_elo if active_color == "w" else black_elo
-
-                    if fen not in data:
-                        data[fen] = {"best_move": next_move_uci, "elo": elo}
-                    else:
-                        # Only update best move if it is made by a stronger engine
-                        if elo > data[fen]["elo"]:
-                            data[fen]["elo"] = elo
-                            data[fen]["best_move"] = next_move_uci
-
-    # Write the best move for each FEN to multiple JSONL files, each with up to one million lines
     output_dir = Path(dir)
     output_dir.mkdir(parents=True, exist_ok=True)
-
     file_index = 0
-    line_count = 0
-    jsonl_file = open(output_dir / f"shard_{file_index}.jsonl", "w")
 
-    for fen, move_data in data.items():
-        jsonl_file.write(json.dumps({fen: move_data["best_move"]}) + "\n")
-        line_count += 1
+    pgn_files = sorted(
+        Path(raw_dir).glob("*.pgn"),
+        key=lambda x: (
+            -float(re.search(r"([\d.]+)s", x.name).group(1))
+            if re.search(r"([\d.]+)s", x.name)
+            else 0
+        ),
+    )
 
-        # If the current file reaches one million lines, start a new file
-        if line_count >= 1_000_000:
-            logger.info(f"Created {jsonl_file.name}.")
-            jsonl_file.close()
-            file_index += 1
-            line_count = 0
-            jsonl_file = open(output_dir / f"shard_{file_index}.jsonl", "w")
+    for pgn_path in pgn_files:
+        file_size = pgn_path.stat().st_size
+        logger.info(f"Processing {pgn_path.name} ({file_size/1024/1024:.2f} MB)")
 
-    # Close the last file
-    jsonl_file.close()
-    logger.info("Finished processing all PGN files.")
+        game_counter = 0  # Initialize a counter for games
+
+        with open(pgn_path, "r") as pgn_file:
+            with tqdm(
+                total=file_size, unit="B", unit_scale=True, desc=pgn_path.name
+            ) as pbar:
+                while True:
+                    start_pos = pgn_file.tell()
+                    game = chess.pgn.read_game(pgn_file)
+                    if game is None:
+                        break
+
+                    process_game(game, data)
+                    pbar.update(pgn_file.tell() - start_pos)
+
+                    game_counter += 1  # Increment the game counter
+
+                    # Log memory usage every 1000 games
+                    if game_counter % 10000 == 0:
+                        memory = psutil.virtual_memory()
+                        logger.info(
+                            f"Processed {game_counter} games. Memory usage: {memory.percent}%"
+                        )
+
+                    # Check memory usage and write data if memory is above 90%
+                    memory = psutil.virtual_memory()
+                    if memory.percent > 95:
+                        logger.warning(
+                            f"Memory usage is high ({memory.percent}%). Writing data to disk..."
+                        )
+                        file_index = write_data_to_file(data, output_dir, file_index)
+                        data.clear()  # Clear the data dictionary to free memory
+
+        # Log memory usage after processing the file
+        memory = psutil.virtual_memory()
+        logger.info(f"Memory usage after processing {pgn_path.name}: {memory.percent}%")
+
+    # Write remaining data
+    if data:
+        file_index = write_data_to_file(data, output_dir, file_index)
+
+    logger.info("Processing complete")
 
 
-generate()
+if __name__ == "__main__":
+    generate()
