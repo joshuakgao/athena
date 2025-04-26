@@ -282,7 +282,7 @@ for epoch in range(NUM_EPOCHS):
         optimizer.step()
 
         # ----- quick logs -----
-        if step % CHECK_METRICS_INT == 0 and step > 0:
+        if step % CHECK_METRICS_INT == 0 and step > 5:
             lr = scheduler.get_last_lr()[0]
             logger.info(
                 f"{epoch+1}: {step}/{iters_per_epoch}    loss: {loss:.4f}    policy_loss {parts['policy']:.4f}    value_loss: {parts['value']:.4f}    lr: {lr:.2e}"
