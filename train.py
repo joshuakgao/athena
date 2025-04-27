@@ -52,9 +52,7 @@ test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
 model = AthenaV6(input_channels=21, num_res_blocks=NUM_RES_BLOCKS)
 model.to(model.device)
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
-scheduler = torch.optim.lr_scheduler.StepLR(
-    optimizer, step_size=LR_DECAY_STEPS, gamma=LR_DECAY_RATE
-)
+scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=LR_DECAY_RATE)
 
 # Directory to save the models
 save_dir = "checkpoints"
@@ -195,11 +193,6 @@ def evaluate(repetition_penalty=0.9):
 logger.info("Training started")
 best_accuracy = -1
 for epoch in tqdm(range(NUM_EPOCHS)):
-    # Learning rate decay
-    if epoch > 0 and epoch % LR_DECAY_STEPS == 0:
-        for param_group in optimizer.param_groups:
-            param_group["lr"] *= LR_DECAY_RATE
-        logger.info(f"Reduced learning rate to {optimizer.param_groups[0]['lr']}")
 
     # Set model to training mode
     model.train()
