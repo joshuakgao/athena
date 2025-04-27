@@ -20,7 +20,7 @@ class AegisDataset(Dataset):
             with open(file_path, "r") as f:
                 for i, line in tqdm(enumerate(f)):
                     # if i >= 1_000_000:
-                    # break
+                    #     break
                     data = json.loads(line.strip())
                     fen = list(data.keys())[0]
                     move = data[fen]
@@ -32,7 +32,7 @@ class AegisDataset(Dataset):
     def __getitem__(self, idx):
         fen, best_move = self.data[idx]
         x = self.encode_position([fen])
-        y = self.encode_move([best_move])
+        y = self.encode_move([best_move], [fen])
         return x[0], y[0], fen, best_move
 
     def encode_position(self, fens):
@@ -59,16 +59,20 @@ class AegisDataset(Dataset):
             20 : half-move clock / 100 (float)
         """
         B = len(fens)
-        planes = np.zeros((B, 21, 8, 8), dtype=np.float32)  # Now only 21 planes needed
+        planes = np.zeros((B, 21, 8, 8), dtype=np.float32)
 
         piece_symbols = "PNBRQKpnbrqk"  # order is important
 
         for b_idx, fen in enumerate(fens):
             board = chess.Board(fen)
+            is_black_turn = not board.turn
 
             # --- 12 piece-presence planes (0-11) --------------------------------
             s = str(board).replace("\n", " ")
             squares = np.array(s.split(), dtype="<U1").reshape(8, 8)
+
+            if is_black_turn:  # Flip the board for Black's perspective
+                squares = np.flip(squares, axis=(0, 1))
 
             for p_idx, symbol in enumerate(piece_symbols):
                 mask = (squares == symbol).astype(np.float32)
@@ -83,17 +87,18 @@ class AegisDataset(Dataset):
             # --- Static context (14-20) -----------------------------------------
             planes[b_idx, 14, :, :] = 1.0 if board.turn == chess.WHITE else 0.0
 
+            # Castling rights (always relative to current player)
             planes[b_idx, 15, :, :] = (
-                1.0 if board.has_kingside_castling_rights(chess.WHITE) else 0.0
+                1.0 if board.has_kingside_castling_rights(board.turn) else 0.0
             )
             planes[b_idx, 16, :, :] = (
-                1.0 if board.has_queenside_castling_rights(chess.WHITE) else 0.0
+                1.0 if board.has_queenside_castling_rights(board.turn) else 0.0
             )
             planes[b_idx, 17, :, :] = (
-                1.0 if board.has_kingside_castling_rights(chess.BLACK) else 0.0
+                1.0 if board.has_kingside_castling_rights(not board.turn) else 0.0
             )
             planes[b_idx, 18, :, :] = (
-                1.0 if board.has_queenside_castling_rights(chess.BLACK) else 0.0
+                1.0 if board.has_queenside_castling_rights(not board.turn) else 0.0
             )
 
             planes[b_idx, 19, :, :] = board.fullmove_number / 100.0
@@ -101,27 +106,43 @@ class AegisDataset(Dataset):
 
         return torch.tensor(planes)
 
-    def encode_move(self, ucis):
-        """Encode moves into 73×8×8 format."""
+    def encode_move(self, ucis, fens):
+        """Encode moves into 73×8×8 format.
+        Args:
+            ucis: List of UCI move strings
+            fens: List of corresponding FEN strings for each position
+        """
         batch_size = len(ucis)
         outputs = torch.zeros((batch_size, 73, 8, 8))
 
-        for i, uci in enumerate(ucis):
+        for i, (uci, fen) in enumerate(zip(ucis, fens)):
             move = chess.Move.from_uci(uci)
+            board = chess.Board(fen)  # Create board from FEN to get accurate turn info
+
             plane_idx = self.get_move_type_index(move)
             from_row = 7 - (move.from_square // 8)
             from_col = move.from_square % 8
-            outputs[i, plane_idx, from_row, from_col] = 1
+            to_row = 7 - (move.to_square // 8)
+            to_col = move.to_square % 8
+
+            # Flip coordinates for Black's perspective
+            if not board.turn:  # If it's Black's turn
+                from_row = 7 - from_row
+                to_row = 7 - to_row
+
+            if move.promotion and move.promotion != chess.QUEEN:
+                outputs[i, plane_idx, to_row, to_col] = 1  # Underpromotion
+            else:
+                outputs[i, plane_idx, from_row, from_col] = 1  # Regular move
 
         return outputs
 
     def get_move_type_index(self, move: chess.Move) -> int:
         """Convert a chess move to its 73-channel plane index."""
-        # ─── Queen-like Moves (0-55) ──────────────────────────────────
         dx = chess.square_file(move.to_square) - chess.square_file(move.from_square)
         dy = chess.square_rank(move.to_square) - chess.square_rank(move.from_square)
 
-        # 8 directions × 7 distances
+        # Queen-like moves (0-55)
         if abs(dx) == abs(dy):  # Diagonal
             direction = {
                 (1, 1): 0,  # NE
@@ -129,7 +150,7 @@ class AegisDataset(Dataset):
                 (1, -1): 2,  # SE
                 (-1, -1): 3,  # SW
             }[(dx // abs(dx), dy // abs(dy))]
-            distance = abs(dx) - 1  # 0-6
+            distance = abs(dx) - 1
             return direction * 7 + distance
 
         elif dx == 0 or dy == 0:  # Straight
@@ -139,10 +160,10 @@ class AegisDataset(Dataset):
                 (1, 0): 6,  # E
                 (-1, 0): 7,  # W
             }[(dx // max(1, abs(dx)), dy // max(1, abs(dy)))]
-            distance = (abs(dx) + abs(dy)) - 1  # 0-6
+            distance = (abs(dx) + abs(dy)) - 1
             return direction * 7 + distance
 
-        # ─── Knight Moves (56-63) ──────────────────────────────────────
+        # Knight moves (56-63)
         elif {abs(dx), abs(dy)} == {1, 2}:
             knight_directions = [
                 (1, 2),
@@ -156,7 +177,7 @@ class AegisDataset(Dataset):
             ]
             return 56 + knight_directions.index((dx, dy))
 
-        # ─── Underpromotions (64-72) ───────────────────────────────────
+        # Underpromotions (64-72)
         elif move.promotion and move.promotion != chess.QUEEN:
             promotion_type = {
                 chess.KNIGHT: 0,
@@ -164,28 +185,32 @@ class AegisDataset(Dataset):
                 chess.ROOK: 2,
             }[move.promotion]
 
-            # Check if capture (left/right) or push (forward)
-            if dx == -1:  # Left capture (e.g., a7→b8)
+            if dx == -1:  # Left capture
                 direction = 0
-            elif dx == 1:  # Right capture (e.g., h7→g8)
+            elif dx == 1:  # Right capture
                 direction = 1
-            else:  # Forward push (e.g., e7→e8)
+            else:  # Forward push
                 direction = 2
 
             return 64 + promotion_type * 3 + direction
 
         raise ValueError(f"Unclassified move: {move}")
 
-    def flat_index_of_move(self, move: chess.Move) -> int:
+    def flat_index_of_move(self, move: chess.Move, turn: chess.Color) -> int:
         """
-        Return the flattened index (0-based, 0‥4671) that the policy head uses
-        for `move`.  This lets us look the probability up in a *single* tensor
-        instead of touching three indices.
+        Return the flattened index (0-based, 0‥4671) for `move`.
         """
-        plane = self.get_move_type_index(move)  # 0‥72
-        row = 7 - (move.from_square // 8)  # 0‥7  (network is flipped)
-        col = move.from_square % 8  # 0‥7
-        return plane * 64 + row * 8 + col  # 73 · 8 · 8 = 4672
+        if not turn:  # Flip for Black's perspective
+            move = chess.Move(
+                chess.square_mirror(move.from_square),
+                chess.square_mirror(move.to_square),
+                promotion=move.promotion,
+            )
+
+        plane = self.get_move_type_index(move)
+        row = 7 - (move.from_square // 8)
+        col = move.from_square % 8
+        return plane * 64 + row * 8 + col
 
     def decode_move(
         self,
@@ -195,47 +220,37 @@ class AegisDataset(Dataset):
         repetition_penalty: float = 0.9,
     ):
         """
-        Convert a batch of raw network outputs `policies` into legal UCI moves,
-        returning both the best move and second-best (ponder) move for each position.
-
-        Args:
-            policies: Tensor of shape (batch_size, 73, 8, 8) - network policy outputs
-            fens: List of FEN strings for each position in the batch
-            apply_softmax: Whether to apply softmax to convert logits to probabilities
-            repetition_penalty: Factor to penalize moves that lead to repetition (1.0 = no penalty)
-
-        Returns:
-            List of tuples: (best_move, ponder_move) for each position
-                        (None, None) if no legal moves
+        Convert raw network outputs `policies` into legal UCI moves.
+        Returns (best_move, ponder_move) for each position.
         """
         best_moves = []
         for logits, fen in zip(policies, fens):
             board = chess.Board(fen)
             legal_moves = list(board.legal_moves)
-            if not legal_moves:  # stalemate / checkmate
+            if not legal_moves:  # Stalemate/checkmate
                 best_moves.append((None, None))
                 continue
 
-            # Vectorise: flatten once, optionally soft-max once
-            flat = logits.view(-1)  # shape (4672,)
+            flat = logits.view(-1)
             if apply_softmax:
                 flat = torch.softmax(flat, dim=0)
 
-            # Get indices and original probabilities for legal moves
+            # Get indices and probabilities for legal moves
             idxs = torch.tensor(
-                [self.flat_index_of_move(m) for m in legal_moves], device=flat.device
+                [self.flat_index_of_move(m, board.turn) for m in legal_moves],
+                device=flat.device,
             )
-            probs = flat[idxs].clone()  # shape (L,)
+            probs = flat[idxs].clone()
 
             # Apply repetition penalty
             if repetition_penalty < 1.0:
                 for i, move in enumerate(legal_moves):
                     board.push(move)
-                    if board.is_repetition(2):  # Would this move cause repetition?
+                    if board.is_repetition(2):
                         probs[i] *= repetition_penalty
                     board.pop()
 
-            # Get top moves - handle cases with only 1 legal move
+            # Get top moves
             k = min(2, len(legal_moves))
             top_indices = torch.topk(probs, k=k).indices
 

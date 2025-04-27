@@ -33,8 +33,6 @@ train_size = dataset_size - test_size
 iters_in_an_epoch = max(len(aegis) // BATCH_SIZE, 1)
 EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 10, 1)
 CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 100, 1)
-LR_DECAY_STEPS = iters_in_an_epoch
-
 
 logger.info(
     f"Dataset size: {dataset_size}, Train size: {train_size}, Test size: {test_size}"
