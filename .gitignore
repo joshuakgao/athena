@@ -6,3 +6,4 @@ checkpoints/
 wandb/
 nohup.out
 *.o*
+datasets/aegis/data_

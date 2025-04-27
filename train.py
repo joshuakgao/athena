@@ -23,6 +23,7 @@ with open("train_config.json", "r") as f:
     TEST_SPLIT_RATIO = config.get("test_split_ratio", 0.2)  # Default to 20% test data
     USE_WANDB = config.get("use_wandb", False)
     NUM_RES_BLOCKS = config.get("num_res_blocks", 19)
+    WIDTH = config.get("width", 128)  # Default width for the model
 
 
 # Create the dataset and split it into training and testing sets

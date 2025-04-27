@@ -20,7 +20,7 @@ class AegisDataset(Dataset):
             with open(file_path, "r") as f:
                 for i, line in tqdm(enumerate(f)):
                     # if i >= 1_000_000:
-                    # break
+                    #     break
                     data = json.loads(line.strip())
                     fen = list(data.keys())[0]
                     move = data[fen]

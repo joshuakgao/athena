@@ -60,21 +60,21 @@ class Athena(nn.Module):
 
 
 class AthenaV6(nn.Module):
-    def __init__(self, input_channels=9, num_res_blocks=19, device="auto"):
+    def __init__(self, input_channels=9, num_res_blocks=19, width=128, device="auto"):
         super(AthenaV6, self).__init__()
-        self.device = device_selector(device, label="Athena")
+        self.device = device_selector(device, label="AthenaV6")
 
         # Initial convolutional layer
-        self.conv1 = nn.Conv2d(input_channels, 128, kernel_size=3, padding=1)
-        self.bn1 = nn.BatchNorm2d(128)
+        self.conv1 = nn.Conv2d(input_channels, width, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(width)
 
         # Residual blocks
         self.residual_blocks = nn.Sequential(
-            *[ResidualBlock(128) for _ in range(num_res_blocks)]
+            *[ResidualBlock(width) for _ in range(num_res_blocks)]
         )
 
         # Policy head (outputs 73x8x8 layers)
-        self.policy_conv = nn.Conv2d(128, 73, kernel_size=1)  # Reduce channels to 73
+        self.policy_conv = nn.Conv2d(width, 73, kernel_size=1)  # Reduce channels to 73
         self.policy_bn = nn.BatchNorm2d(73)
         self.policy_fc = nn.Linear(
             73 * 8 * 8, 8 * 8 * 73
