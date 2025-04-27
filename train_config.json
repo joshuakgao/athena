@@ -1,6 +1,6 @@
 {
-    "model_name": "1.46_AthenaV6-19",
-    "description": "Use alphazero encoding.",
+    "model_name": "1.48_AthenaV6-19",
+    "description": "Use multiple move encoding.",
     "num_epochs": 100,
     "lr": 0.00006,
     "lr_decay_rate": 0.99,

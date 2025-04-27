@@ -6,34 +6,82 @@ import numpy as np
 import torch
 from torch.utils.data import Dataset
 from tqdm import tqdm
+import pandas as pd
+import random
 
 
 class AegisDataset(Dataset):
-    def __init__(self, dir="datasets/aegis/data", raw_dir="datasets/aegis/raw_data"):
-        self.raw_dir = Path(raw_dir)
+    def __init__(
+        self, dir="datasets/aegis/data", n=10000000, no_load=False, test=False
+    ):
+        """
+        Args:
+            dir: Directory containing the dataset
+            n: Number of samples to load (ignored for test set)
+            no_load: If True, skip loading data
+            test: If True, load the test set (test.parquet)
+        """
         self.dir = Path(dir)
-        self.files = list(self.dir.glob("*.jsonl"))  # Collect all JSONL files
+        self.test = test
+        self.n = n
+        self.metadata_path = self.dir / "metadata.json"
+        self.data = pd.DataFrame(columns=["fen", "top_moves", "evals"])
 
-        # Pre-load all data into memory during initialization
-        self.data = []
-        for file_path in self.files:
-            with open(file_path, "r") as f:
-                for i, line in tqdm(enumerate(f)):
-                    # if i >= 1_000_000:
-                    # break
-                    data = json.loads(line.strip())
-                    fen = list(data.keys())[0]
-                    move = data[fen]
-                    self.data.append((fen, move))
+        if not test:
+            # Get all shards except test.parquet
+            self.shard_paths = [
+                p for p in self.dir.glob("*.parquet") if p.name != "test.parquet"
+            ]
+        else:
+            # Use only the test.parquet file
+            self.test_path = self.dir / "test.parquet"
+
+        # Load metadata
+        with open(self.metadata_path, "r") as f:
+            self.metadata = json.load(f)
+
+        if not no_load:
+            self.sample_dataset()
+
+    def sample_dataset(self):
+        if self.test:
+            # Load the entire test set
+            self.data = pd.read_parquet(
+                self.test_path, columns=["fen", "top_moves", "evals"]
+            )
+        else:
+            # Load a sampled subset of the training set
+            self.data = pd.DataFrame(columns=["fen", "top_moves", "evals"])
+            num_shards = len(self.shard_paths)
+            samples_per_shard = self.n // num_shards
+
+            pieces = []
+            for shard_path in tqdm(
+                self.shard_paths, desc=f"Sampling ~{self.n} of Aegis"
+            ):
+                df = pd.read_parquet(shard_path, columns=["fen", "top_moves", "evals"])
+                num_rows = df.shape[0]
+                random_indexes = random.sample(
+                    range(num_rows), min(samples_per_shard, num_rows)
+                )
+                sampled_df = df.iloc[random_indexes]
+                pieces.append(sampled_df)
+
+            self.data = pd.concat(pieces, ignore_index=True)
 
     def __len__(self):
         return len(self.data)
 
     def __getitem__(self, idx):
-        fen, best_move = self.data[idx]
-        x = self.encode_position([fen])
-        y = self.encode_move([best_move])
-        return x[0], y[0], fen, best_move
+        row = self.data.iloc[idx]
+        fen = row["fen"]
+        top_moves = row["top_moves"]
+        evals = row["evals"]
+
+        X = self.encode_position([fen])
+        Y = self.encode_move([top_moves], [evals])
+
+        return X[0], Y[0], fen, list(top_moves), list(evals)
 
     def encode_position(self, fens):
         """
@@ -101,17 +149,42 @@ class AegisDataset(Dataset):
 
         return torch.tensor(planes)
 
-    def encode_move(self, ucis):
-        """Encode moves into 73×8×8 format."""
-        batch_size = len(ucis)
-        outputs = torch.zeros((batch_size, 73, 8, 8))
+    def encode_move(self, top_moves: list, evals: list):
+        """
+        Encode moves into a probability distribution tensor weighted by centipawn scores.
 
-        for i, uci in enumerate(ucis):
-            move = chess.Move.from_uci(uci)
-            plane_idx = self.get_move_type_index(move)
-            from_row = 7 - (move.from_square // 8)
-            from_col = move.from_square % 8
-            outputs[i, plane_idx, from_row, from_col] = 1
+        Args:
+            top_moves: List of lists, where each inner list contains UCI moves
+                        for a position, e.g., [["e2e4", "d2d4"], ["g1f3", "c2c4"], ...].
+            evals: List of lists, where each inner list contains centipawn scores
+                    corresponding to the moves in `top_moves`, e.g., [[25, 20], [30, 15], ...].
+
+        Returns:
+            Tensor of shape [batch_size, 4672] with centipawn-weighted probabilities.
+        """
+        batch_size = len(top_moves)
+        outputs = torch.zeros((batch_size, 4672), dtype=torch.float32)
+
+        for i, (moves, scores) in enumerate(zip(top_moves, evals)):
+            if len(moves) == 0:
+                continue  # No valid moves (unlikely in practice)
+
+            # --- Convert centipawns to probabilities ---
+            scores = np.array(scores, dtype=np.float32)
+
+            # Option 3: Centipawn-to-win-probability (Stockfish-style)
+            k = 0.003  # Tune this hyperparameter
+            probs = 1 / (1 + np.exp(-k * scores))
+            probs = probs / probs.sum()  # Normalize
+
+            # Convert probs to a PyTorch tensor
+            probs = torch.tensor(probs, dtype=torch.float32)
+
+            # --- Assign probabilities to output tensor ---
+            for move_uci, prob in zip(moves, probs):
+                move = chess.Move.from_uci(move_uci)
+                flat_idx = self.flat_index_of_move(move)
+                outputs[i, flat_idx] = prob
 
         return outputs
 

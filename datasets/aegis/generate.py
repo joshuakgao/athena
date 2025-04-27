@@ -1,94 +1,298 @@
 import json
 import os
-import re
+import random
 import sys
+import traceback
 from pathlib import Path
 
-import chess
-import chess.pgn
+import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
+from tqdm import tqdm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from utils.logger import logger
 
+# --- Configuration ---
 raw_dir = "datasets/aegis/raw_data"
 dir = "datasets/aegis/data"
-MAX_NUM_POSITIONS = 50_000_000
+output_dir_path = Path(dir)
+test_output_path = output_dir_path / "test.parquet"
+positions_per_shard = 1_000_000
+min_depth_threshold = 20
+max_depth_threshold = 9999
+samples_per_shard_for_test = 100
+
+# Define PyArrow schema
+ARROW_SCHEMA = pa.schema(
+    [
+        ("fen", pa.string()),
+        ("top_moves", pa.list_(pa.string())),
+        ("elo", pa.int32()),
+        ("bot", pa.string()),
+        ("depth", pa.int32()),
+        ("evals", pa.list_(pa.int32())),
+    ]
+)
 
 
-def write_data_to_file(data, output_dir):
-    """Write data to JSONL shards"""
-    shard_size = 1_000_000
-    items = list(data.items())
-    for i in range(0, len(items), shard_size):
-        shard = items[i : i + shard_size]
-        output_path = output_dir / f"aegis_{i // shard_size:04d}.jsonl"
-        with open(output_path, "w") as f:
-            for fen, move_data in shard:
-                json.dump({fen: move_data}, f)
-                f.write("\n")
-        logger.info(f"Created {output_path} with {len(shard)} positions")
+def write_batch_to_parquet(batch, file_path, schema):
+    """Helper function to write a batch of records to a Parquet file."""
+    if not batch:
+        logger.warning(f"Attempted to write an empty batch to {file_path}. Skipping.")
+        return 0
+    try:
+        table = pa.Table.from_pylist(batch, schema=schema)
+        pq.write_table(table, file_path)
+        return len(batch)
+    except Exception as e:
+        logger.error(f"Error writing batch to {file_path}: {e}")
+        logger.error(f"Problematic batch (first 5 items): {batch[:5]}")
+        raise
 
 
-def extract_eval_and_depth(comment):
-    """Extract evaluation and depth from PGN comment."""
-    match = re.search(r"([+-]?\d+(\.\d+)?)/(\d+)", comment)
-    if match:
-        eval_str = match.group(1)
-        depth = int(match.group(3))
-        eval_cp = int(float(eval_str) * 100)
-        return eval_cp, depth
-    return None, None
+def sample_and_split_batch(batch, num_samples):
+    """Samples items from batch for test set, returns train batch and test samples."""
+    if not batch:
+        return [], []
+
+    actual_samples = min(num_samples, len(batch))
+    if actual_samples == 0:
+        return batch, []
+
+    sample_indices = random.sample(range(len(batch)), actual_samples)
+    test_samples = [batch[i] for i in sample_indices]
+    train_batch = [item for i, item in enumerate(batch) if i not in sample_indices]
+    return train_batch, test_samples
 
 
-def process_game(game, data):
-    """Process a single game and update the data dictionary."""
-    board = game.board()
+def parse_lichess_eval_jsonl(jsonl_path):
+    """Parse Lichess evaluation JSONL file and yield processed records."""
+    file_size = jsonl_path.stat().st_size
+    with open(jsonl_path, "rb") as f:
+        with tqdm(
+            total=file_size, unit="B", unit_scale=True, desc="Reading JSONL"
+        ) as pbar:
+            for raw_bytes in f:
+                line = raw_bytes.decode("utf-8").strip()
+                pbar.update(len(raw_bytes))
 
-    for node in game.mainline():
-        fen = board.fen()
-        move = node.move
+                if not line:
+                    continue
 
-        if move not in board.legal_moves:
-            logger.warning(f"Illegal move: {move} in FEN: {fen}")
-            continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Skipping invalid JSON: {e}")
+                    continue
 
-        board.push(move)
-        next_move_uci = move.uci()
-        comment = node.comment
-        depth = extract_eval_and_depth(comment)[1] or 0
+                fen = data.get("fen")
+                evals_list = data.get("evals", [])
+                if not fen or not evals_list:
+                    continue
 
-        if fen not in data or depth > data[fen].get("depth", 0):
-            data[fen] = {"best_move": next_move_uci, "depth": depth}
+                # Ensure FEN includes turn counters (set to 0 and 1 if missing)
+                fen_parts = fen.split()
+                if len(fen_parts) < 6:
+                    fen = " ".join(fen_parts + ["0", "1"])
+
+                # Get active color from FEN (part after the board, index 1)
+                active_color = fen_parts[1] if len(fen_parts) > 1 else "w"
+
+                # Filter evaluations to include only those within the depth range
+                valid_evals = [
+                    e
+                    for e in evals_list
+                    if min_depth_threshold <= e.get("depth", 0) <= max_depth_threshold
+                ]
+
+                if not valid_evals:
+                    continue
+
+                all_pvs = []
+                for eval_entry in valid_evals:
+                    all_pvs.extend(eval_entry.get("pvs", []))
+
+                # Sort all pvs based on depth and evaluation
+                if active_color == "w":
+                    all_pvs = sorted(
+                        all_pvs,
+                        key=lambda pv: (
+                            pv.get("depth", 0),  # Sort by depth first
+                            (
+                                10000
+                                if pv.get("mate", 0) > 0
+                                else (
+                                    -10000 if pv.get("mate", 0) < 0 else pv.get("cp", 0)
+                                )
+                            ),
+                        ),
+                        reverse=True,  # Sort in descending order
+                    )
+                else:
+                    all_pvs = sorted(
+                        all_pvs,
+                        key=lambda pv: (
+                            pv.get("depth", 0),  # Sort by depth first
+                            (
+                                10000
+                                if pv.get("mate", 0) > 0
+                                else (
+                                    -10000 if pv.get("mate", 0) < 0 else pv.get("cp", 0)
+                                )
+                            ),
+                        ),
+                    )
+
+                top_moves = []
+                evals = []
+                for pv in all_pvs:
+                    move = pv.get("line", "").strip().split()[0]
+                    eval = pv.get("cp", None)
+
+                    # Handle mate scores
+                    if eval is None:
+                        mate_in = pv.get("mate", 0)
+                        eval = 10000 if mate_in > 0 else -10000
+
+                    # Check if move already exists in top_moves
+                    if move and move not in top_moves:
+                        top_moves.append(move)
+                        evals.append(int(eval))
+
+                if not top_moves:
+                    continue
+
+                yield {
+                    "fen": fen,
+                    "top_moves": top_moves,
+                    "depth": int(eval_entry["depth"]),
+                    "evals": evals,
+                    "bot": "Lichess Stockfish",
+                    "elo": 3582,
+                }
 
 
 def generate():
-    data = {}
-    output_dir = Path(dir)
-    output_dir.mkdir(parents=True, exist_ok=True)
+    output_dir_path.mkdir(parents=True, exist_ok=True)
 
-    pgn_files = sorted(
-        Path(raw_dir).glob("*.pgn"),
-        key=lambda x: (
-            -float(re.search(r"([\d.]+)s", x.name).group(1))
-            if re.search(r"([\d.]+)s", x.name)
-            else 0
-        ),
+    # Stats tracking
+    stats = {
+        "total_positions": 0,
+        "train_positions": 0,
+        "test_positions": 0,
+        "depth_stats": {"min": float("inf"), "max": float("-inf"), "sum": 0},
+    }
+
+    current_shard_batch = []
+    shard_index = 0
+    test_set_accumulated = []
+
+    jsonl_files = list(Path(raw_dir).glob("*.jsonl"))
+    if not jsonl_files:
+        logger.error("No JSONL files found in raw_data directory")
+        return
+
+    for jfile in jsonl_files:
+        logger.info(f"Processing JSONL file: {jfile.name}")
+
+        for record in parse_lichess_eval_jsonl(jfile):
+            stats["total_positions"] += 1
+            stats["depth_stats"]["min"] = min(
+                stats["depth_stats"]["min"], record["depth"]
+            )
+            stats["depth_stats"]["max"] = max(
+                stats["depth_stats"]["max"], record["depth"]
+            )
+            stats["depth_stats"]["sum"] += record["depth"]
+
+            current_shard_batch.append(record)
+
+            if len(current_shard_batch) >= positions_per_shard:
+                train_batch, test_samples = sample_and_split_batch(
+                    current_shard_batch, samples_per_shard_for_test
+                )
+
+                if test_samples:
+                    test_set_accumulated.extend(test_samples)
+                    stats["test_positions"] += len(test_samples)
+
+                # Write training shard
+                shard_file_path = output_dir_path / f"shard_{shard_index}.parquet"
+                written = write_batch_to_parquet(
+                    train_batch, shard_file_path, ARROW_SCHEMA
+                )
+                stats["train_positions"] += written
+                logger.info(f"Written training shard {shard_index} ({written} records)")
+
+                current_shard_batch.clear()
+                shard_index += 1
+
+    # Process final batch
+    if current_shard_batch:
+        train_batch, test_samples = sample_and_split_batch(
+            current_shard_batch, samples_per_shard_for_test
+        )
+
+        if test_samples:
+            test_set_accumulated.extend(test_samples)
+            stats["test_positions"] += len(test_samples)
+
+        # Write final training shard
+        shard_file_path = output_dir_path / f"shard_{shard_index}.parquet"
+        written = write_batch_to_parquet(train_batch, shard_file_path, ARROW_SCHEMA)
+        stats["train_positions"] += written
+        logger.info(f"Written final training shard {shard_index} ({written} records)")
+
+    # Write test set
+    if test_set_accumulated:
+        test_written = write_batch_to_parquet(
+            test_set_accumulated, test_output_path, ARROW_SCHEMA
+        )
+        logger.info(
+            f"Written test set with {test_written} records to {test_output_path}"
+        )
+    else:
+        logger.warning("No samples were collected for the test set.")
+
+    # Calculate average depth
+    avg_depth = (
+        stats["depth_stats"]["sum"] / stats["total_positions"]
+        if stats["total_positions"] > 0
+        else 0
     )
 
-    for pgn_path in pgn_files:
-        with open(pgn_path, "r") as pgn_file:
-            while True:
-                game = chess.pgn.read_game(pgn_file)
-                if game is None:
-                    break
+    # Prepare metadata
+    metadata = {
+        "total_positions_processed": stats["total_positions"],
+        "train_set_size": stats["train_positions"],
+        "test_set_size": stats["test_positions"],
+        "depth_stats": {
+            "min": stats["depth_stats"]["min"],
+            "max": stats["depth_stats"]["max"],
+            "avg": round(avg_depth, 2),
+        },
+        "min_depth_threshold": min_depth_threshold,
+        "positions_per_shard": positions_per_shard,
+        "samples_per_shard_for_test": samples_per_shard_for_test,
+    }
 
-                process_game(game, data)
+    metadata_path = output_dir_path / "metadata.json"
+    try:
+        with open(metadata_path, "w") as f:
+            json.dump(metadata, f, indent=4)
+        logger.info(f"Metadata saved to {metadata_path}")
+    except Exception as e:
+        logger.error(f"Failed to save metadata file: {e}")
 
-                if len(data) >= MAX_NUM_POSITIONS:
-                    data = dict(list(data.items())[:MAX_NUM_POSITIONS])
-                    write_data_to_file(data, output_dir)
-                    return
+    logger.info("--- Processing Finished ---")
+    logger.info(f"Final training shards written to: {output_dir_path}")
+    logger.info(f"Test set written to: {test_output_path}")
 
 
 if __name__ == "__main__":
-    generate()
+    try:
+        generate()
+    except Exception as main_e:
+        logger.critical(f"Critical error in main execution: {main_e}", exc_info=True)
+        sys.exit(1)

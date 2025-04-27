@@ -34,19 +34,31 @@ iters_in_an_epoch = max(len(aegis) // BATCH_SIZE, 1)
 EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 10, 1)
 CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 100, 1)
 LR_DECAY_STEPS = iters_in_an_epoch
+test_dataset = AegisDataset(test=True)
 
 
-logger.info(
-    f"Dataset size: {dataset_size}, Train size: {train_size}, Test size: {test_size}"
-)
+def custom_collate_fn(batch):
+    X, Y, fens, top_moves, evals = zip(*batch)
 
-train_dataset, test_dataset = random_split(aegis, [train_size, test_size])
+    # Stack tensors for X and Y
+    X = torch.stack(X)
+    Y = torch.stack(Y)
+
+    # Keep fens, top_moves, and evals as lists
+    return X, Y, fens, top_moves, evals
+
 
 # Create DataLoaders for training and testing
 train_dataloader = DataLoader(
-    train_dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True
+    aegis,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    drop_last=True,
+    collate_fn=custom_collate_fn,
 )
-test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+test_dataloader = DataLoader(
+    test_dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=custom_collate_fn
+)
 
 # Create the model, loss function, and optimizer
 model = AthenaV6(input_channels=21, num_res_blocks=NUM_RES_BLOCKS)
@@ -63,39 +75,42 @@ if USE_WANDB:
     wandb.watch(model)
 
 
+# Use the custom collate function in the DataLoader
+train_dataloader = DataLoader(
+    aegis,
+    batch_size=BATCH_SIZE,
+    shuffle=True,
+    drop_last=True,
+    collate_fn=custom_collate_fn,
+)
+
+
 def loss_function(
-    policy_logits: torch.Tensor,  # [B, 73, 8, 8]  ← model output
-    policy_target,  # one-hot tensor  *or*  list[str|Move]
+    policy_logits: torch.Tensor,  # [B, 73, 8, 8] ← model output (logits)
+    policy_targets: torch.Tensor,  # [B, 4672] ← centipawn-weighted probabilities
 ):
     """
-    Cross-entropy on the single correct move  +  value MSE.
+    Computes the loss for move probability prediction.
 
-    • `policy_target` can be
-        – a one-hot tensor of shape [B,73,8,8]  (what your dataloader yields now), or
-        – a list of moves (UCI strings or chess.Move objects).
+    Args:
+        policy_logits: Raw network output (un-normalized logits).
+        policy_targets: Target probabilities (sum to 1 for valid moves).
+
+    Returns:
+        Cross-entropy loss between predicted and target distributions.
     """
     B = policy_logits.size(0)
-    logits_flat = policy_logits.view(B, -1)  # (B, 4672)
+    logits_flat = policy_logits.view(B, -1)  # [B, 4672]
 
-    # -------- target index -------------------------------------------------
-    if torch.is_tensor(policy_target):
-        # one-hot → index
-        target_idx = policy_target.view(B, -1).argmax(dim=1)
-    else:
-        # list of moves → index
-        moves = policy_target
-        if isinstance(moves[0], str):  # accept UCI strings
-            moves = [chess.Move.from_uci(m) for m in moves]
-        target_idx = torch.tensor(
-            [aegis.flat_index_of_move(m) for m in moves],
-            device=logits_flat.device,
-            dtype=torch.long,
-        )
+    # Option 1: KL Divergence (for probabilistic targets)
+    loss = F.kl_div(
+        F.log_softmax(logits_flat, dim=1),  # Predicted log-probabilities
+        policy_targets,  # Target probabilities
+        reduction="batchmean",  # Mean over batch
+        log_target=False,  # Targets are raw probabilities (not log)
+    )
 
-    # -------- losses -------------------------------------------------------
-    loss_policy = F.cross_entropy(logits_flat, target_idx)
-
-    return loss_policy
+    return loss
 
 
 def evaluate(repetition_penalty=0.9):
@@ -105,6 +120,8 @@ def evaluate(repetition_penalty=0.9):
     - Repetition avoidance
     - Detailed move statistics
     - Better logging
+    - Accuracy calculation with leeway for moves within 10% of the best move's eval
+    - Guaranteed inclusion of best move in valid_moves
     """
     model.eval()
     metrics = {
@@ -118,7 +135,7 @@ def evaluate(repetition_penalty=0.9):
     max_samples_to_print = 20
 
     with torch.no_grad():
-        for X, Y, fens, best_moves in test_dataloader:
+        for X, Y, fens, top_moves_batched, evals_batched in test_dataloader:
             X = X.to(model.device)
             Y = Y.to(model.device)
             preds = model(X)
@@ -133,43 +150,67 @@ def evaluate(repetition_penalty=0.9):
                 preds, fens, repetition_penalty=repetition_penalty
             )
 
-            # Decode target moves
-            target_moves = [
-                aegis.decode_move(Y[i].unsqueeze(0), [fens[i]])[0][0]
-                for i in range(batch_size)
-            ]
-
-            for i, ((best_move, ponder_move), target_move, fen) in enumerate(
-                zip(pred_moves, target_moves, fens)
+            for i, ((best_move, ponder_move), fen, top_moves, evals) in enumerate(
+                zip(pred_moves, fens, top_moves_batched, evals_batched)
             ):
-                if best_move is None or target_move is None:
-                    continue
-
                 # Convert to strings for comparison
                 best_move_str = str(best_move)
-                target_move_str = str(target_move)
                 ponder_move_str = str(ponder_move) if ponder_move else None
 
+                # Determine active color from FEN
+                active_color = fen.split()[1]  # 'w' for white, 'b' for black
+
+                # Initialize with at least the best move
+                valid_moves = []
+
+                # Get all moves with their evaluations
+                move_evals = list(zip(top_moves, evals))
+
+                # Find the best evaluation for the active color
+                if active_color == "w":
+                    best_eval = max(evals)
+                    if best_eval < 0:
+                        threshold = best_eval * 1.2 - 10
+                    elif best_eval > 0:
+                        threshold = best_eval * 0.8 - 10
+                    else:
+                        threshold = best_eval - 10
+                    valid_moves = [
+                        str(move) for move, eval in move_evals if eval >= threshold
+                    ]
+                else:  # black's turn
+                    best_eval = min(evals)
+                    if best_eval > 0:
+                        threshold = best_eval * 1.2 + 10
+                    elif best_eval < 0:
+                        threshold = best_eval * 0.8 + 10
+                    else:
+                        threshold = best_eval + 10
+                    valid_moves = [
+                        str(move) for move, eval in move_evals if eval <= threshold
+                    ]
+
                 # Update statistics
-                metrics["correct"] += best_move_str == target_move_str
-                metrics["top2_correct"] += (best_move_str == target_move_str) or (
-                    ponder_move_str and ponder_move_str == target_move_str
+                metrics["correct"] += best_move_str in valid_moves
+                metrics["top2_correct"] += int(
+                    (best_move_str in valid_moves)
+                    or (ponder_move_str is not None and ponder_move_str in valid_moves)
                 )
                 metrics["total"] += 1
 
                 # Print sample predictions
                 if printed_samples < max_samples_to_print:
-                    status = "✅" if best_move_str == target_move_str else "❌"
+                    status = "✅" if best_move_str in valid_moves else "❌"
                     top2_status = (
                         "(top2)"
-                        if ponder_move_str and ponder_move_str == target_move_str
+                        if ponder_move_str and ponder_move_str in valid_moves
                         else ""
                     )
 
                     logger.info(
                         f"FEN: {fen}\n"
                         f"Move: {best_move_str} {status} {top2_status}\n"
-                        f"Target: {target_move_str}\n"
+                        f"Valid Moves: {valid_moves}\n"
                         f"Ponder: {ponder_move_str}\n"
                         f"{'-'*40}"
                     )
@@ -202,7 +243,7 @@ for epoch in tqdm(range(NUM_EPOCHS)):
     # Set model to training mode
     model.train()
 
-    for batch_idx, (X, Y, fens, best_moves) in enumerate(train_dataloader):
+    for batch_idx, (X, Y, _, _, _) in enumerate(train_dataloader):
         # Move data to device
         X = X.to(model.device)
         Y = Y.to(model.device)
