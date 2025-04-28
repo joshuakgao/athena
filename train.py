@@ -7,8 +7,7 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 import wandb
-from architecture import Athena, AthenaV2, AthenaV3, AthenaV4, AthenaV5
-from alphazero_arch import AlphaZeroNet
+from architecture import Athena, AthenaV2, AthenaV3, AthenaV4, AthenaV5, AthenaV6_PPO
 from datasets.aegis.dataset import AegisDataset
 import chess
 
@@ -19,6 +18,7 @@ from utils.logger import logger
 with open("train_config.json", "r") as f:
     cfg = json.load(f)
 
+logger.info(cfg)
 MODEL_NAME = cfg.get("model_name")
 NUM_EPOCHS = cfg["num_epochs"]
 LR = cfg["lr"]
@@ -30,30 +30,22 @@ WIDTH = cfg.get("width", 256)
 TRAIN_SAMPLES_PER_EPOCH = cfg.get("train_samples_per_epoch", 10_000_000)
 
 # ─────────────────────────── DATA ─────────────────────────────
-aegis = AegisDataset(train_n=TRAIN_SAMPLES_PER_EPOCH)  # yields 5 items
-iters_per_epoch = max(len(aegis.train_dataset) // BATCH_SIZE, 1)
+aegis = AegisDataset(n=TRAIN_SAMPLES_PER_EPOCH)
+test_aegis = AegisDataset(test=True)
+iters_per_epoch = max(len(aegis) // BATCH_SIZE, 1)
 CHECK_METRICS_INT = max(iters_per_epoch // 100, 1)
 EVAL_MODEL_INT = max(iters_per_epoch // 10, 1)
 
 logger.info(
-    f"Train size: {len(aegis.train_dataset)}, " f"Test size: {len(aegis.test_dataset)}"
-)
-logger.info(
     f"Metrics every {CHECK_METRICS_INT} iters, " f"Eval every {EVAL_MODEL_INT} iters"
 )
 
-train_loader = DataLoader(
-    aegis.train_dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True
-)
-test_loader = DataLoader(aegis.test_dataset, batch_size=BATCH_SIZE)
+train_loader = DataLoader(aegis, batch_size=BATCH_SIZE, shuffle=True, drop_last=True)
+test_loader = DataLoader(test_aegis, batch_size=BATCH_SIZE)
 
 # ─────────────────────────── MODEL ────────────────────────────
-# model = Athena(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
-# model = AthenaV2(input_channels=119, num_res_blocks=NUM_RES_BLOCKS).to("cuda")
-model = AthenaV3(input_channels=119, width=WIDTH, num_res_blocks=NUM_RES_BLOCKS).to(
-    "cuda"
-)
-# model = AlphaZeroNet(input_channels=119, num_blocks=NUM_RES_BLOCKS).to("cuda")
+model = AthenaV6_PPO(input_channels=18, width=WIDTH, num_res_blocks=NUM_RES_BLOCKS)
+model = model.to(model.device)
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=LR_DECAY_RATE)
 
@@ -133,7 +125,7 @@ def evaluate(model, repetition_penalty=0.9):
 
     with torch.no_grad():
         for batch in test_loader:
-            X, P_tgt, V_tgt, fens, bots, depths, elos, evals = batch
+            X, P_tgt, V_tgt, fens, evals = batch
             X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
             P_pred, V_pred = model(X)
 
@@ -170,10 +162,6 @@ def evaluate(model, repetition_penalty=0.9):
                 eval_pred,
                 eval_tgt,
                 fen,
-                bot,
-                elo,
-                depth,
-                eval,
             ) in enumerate(
                 zip(
                     pred_moves,
@@ -181,10 +169,6 @@ def evaluate(model, repetition_penalty=0.9):
                     V_pred,
                     V_tgt,
                     fens,
-                    bots,
-                    elos,
-                    depths,
-                    evals,
                 )
             ):
                 if best_move is None or target_move is None:
@@ -198,14 +182,6 @@ def evaluate(model, repetition_penalty=0.9):
                 # Decode evaluations
                 pred_eval = aegis.decode_eval([eval_pred])[0]
                 target_eval = aegis.decode_eval([eval_tgt])[0]
-
-                # Check for repetition avoidance
-                board = chess.Board(fen)
-                board.push(best_move)
-                avoided_repetition = board.is_repetition(2)
-                board.pop()
-                if avoided_repetition:
-                    metrics["repetition_avoided"] += 1
 
                 # Update statistics
                 metrics["correct"] += best_move_str == target_move_str
@@ -229,7 +205,6 @@ def evaluate(model, repetition_penalty=0.9):
                         f"Target: {target_move_str}\n"
                         f"Ponder: {ponder_move_str}\n"
                         f"Eval: {pred_eval:.2f} vs {target_eval:.2f}\n"
-                        f"Bot: {bot} ELO: {elo} Depth: {depth}\n"
                         f"{'-'*40}"
                     )
                     printed_samples += 1
@@ -246,8 +221,6 @@ def evaluate(model, repetition_penalty=0.9):
             "eval_value_loss": metrics["value_mse"] / metrics["total"],
             "eval_accuracy": metrics["correct"] / metrics["total"],
             "top2_accuracy": metrics["top2_correct"] / metrics["total"],
-            "repetition_avoidance_rate": metrics["repetition_avoided"]
-            / metrics["total"],
         }
     else:
         results = {
@@ -257,7 +230,6 @@ def evaluate(model, repetition_penalty=0.9):
                 "eval_value_loss",
                 "eval_accuracy",
                 "top2_accuracy",
-                "repetition_avoidance_rate",
             ]
         }
 
@@ -274,7 +246,7 @@ logger.info("Training started")
 
 for epoch in range(NUM_EPOCHS):
     model.train()
-    for step, (X, P_tgt, V_tgt) in enumerate(train_loader):
+    for step, (X, P_tgt, V_tgt, fen, eval) in enumerate(train_loader):
         X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
 
         P_pred, V_pred = model(X)
@@ -318,7 +290,7 @@ for epoch in range(NUM_EPOCHS):
 
     # end‑epoch housekeeping
     scheduler.step()
-    aegis.train_dataset.sample_dataset()  # fresh sample for next epoch
+    aegis.sample_dataset()  # fresh sample for next epoch
     logger.info(f"End of epoch {epoch+1} – lr is now {scheduler.get_last_lr()[0]:.2e}")
 
 

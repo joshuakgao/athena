@@ -336,3 +336,44 @@ class AthenaV5(nn.Module):
         value = self.value_head(x)  # [B, 1]
 
         return policy, value
+
+
+class AthenaV6_PPO(nn.Module):
+    def __init__(self, input_channels=21, num_res_blocks=19, width=128, device="auto"):
+        super().__init__()
+        self.device = device_selector(device, label="AthenaV6_PPO")
+
+        # Shared backbone (same as original)
+        self.backbone = nn.Sequential(
+            nn.Conv2d(input_channels, width, 3, padding=1),
+            nn.BatchNorm2d(width),
+            nn.ReLU(),
+            *[ResidualBlock(width) for _ in range(num_res_blocks)]
+        )
+
+        # Policy Head (73x8x8 logits)
+        self.policy_head = nn.Sequential(
+            nn.Conv2d(width, 73, 1),
+            nn.BatchNorm2d(73),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(73 * 8 * 8, 73 * 8 * 8),
+        )
+
+        # Value Head (scalar evaluation)
+        self.value_head = nn.Sequential(
+            nn.Conv2d(width, 3, 1),  # Reduce channels
+            nn.BatchNorm2d(3),
+            nn.ReLU(),
+            nn.Flatten(),
+            nn.Linear(3 * 8 * 8, 256),
+            nn.ReLU(),
+            nn.Linear(256, 1),
+            nn.Tanh(),  # Output in [-1, 1]
+        )
+
+    def forward(self, x):
+        features = self.backbone(x)
+        logits = self.policy_head(features).view(-1, 73, 8, 8)
+        value = self.value_head(features)
+        return logits, value
