@@ -7,3 +7,4 @@ wandb/
 nohup.out
 *.o*
 datasets/aegis/data_
+selfplay_games.pgn

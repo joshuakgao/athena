@@ -9,13 +9,22 @@ from tqdm import tqdm
 
 
 class AegisDataset(Dataset):
-    def __init__(self, dir="datasets/aegis/data", raw_dir="datasets/aegis/raw_data"):
+    def __init__(
+        self,
+        dir="datasets/aegis/data",
+        raw_dir="datasets/aegis/raw_data",
+        no_load=False,
+    ):
         self.raw_dir = Path(raw_dir)
         self.dir = Path(dir)
         self.files = list(self.dir.glob("*.jsonl"))  # Collect all JSONL files
 
         # Pre-load all data into memory during initialization
         self.data = []
+
+        if no_load:
+            return
+
         for file_path in self.files:
             with open(file_path, "r") as f:
                 for i, line in tqdm(enumerate(f)):

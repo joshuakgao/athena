@@ -1,254 +1,243 @@
-import chess
+#!/usr/bin/env python3
+"""
+Enhanced self-play script for Athena chess policy-value network with:
+- Repetition avoidance
+- Ponder move analysis
+- Improved game diversity
+- Better logging and statistics
+"""
+
+import argparse
+import time
+from pathlib import Path
+import random
+from collections import defaultdict
+
 import torch
-import numpy as np
-from architecture import Athena
+import chess
+import chess.pgn
+
+# Project-local imports
+from architecture import AthenaV6
+from datasets.aegis.dataset import AegisDataset
+
+aegis = AegisDataset(no_load=True)
 
 
-class AthenaChessEngine:
-    def __init__(self, model_path, device="auto"):
-        """
-        Initialize the Athena chess engine with a trained model.
+def load_model(checkpoint: str, device: torch.device, *, num_res_blocks: int = 19):
+    """Load model with error handling."""
+    try:
+        model = AthenaV6(input_channels=21, num_res_blocks=num_res_blocks).to(device)
+        state = torch.load(checkpoint, map_location=device)
+        model.load_state_dict(state)
+        model.eval()
+        return model
+    except Exception as e:
+        raise RuntimeError(f"Failed to load model from {checkpoint}: {str(e)}")
 
-        Args:
-            model_path (str): Path to the saved model weights
-            device (str): Device to run the model on ('cpu', 'cuda', or 'auto')
-        """
-        # Determine the device to use
-        if device == "auto":
-            device = torch.device("mps" if torch.backends.mps.is_available() else "cpu")
-        else:
-            device = torch.device(device)
 
-        self.device = device
-        self.model = Athena(device=device)
+def policy_move(
+    model: torch.nn.Module,
+    board: chess.Board,
+    device: torch.device,
+    *,
+    repetition_penalty: float = 0.5,
+    temperature: float = 1.0,
+):
+    """
+    Enhanced move selection with:
+    - Repetition avoidance
+    - Temperature-controlled randomness
+    - Top-2 move consideration
+    """
+    X = aegis.encode_position([board.fen()]).to(device)
 
-        # Load the model with proper device mapping
-        try:
-            # Load model and ensure all tensors are on the correct device
-            state_dict = torch.load(model_path, map_location=device)
-            self.model.load_state_dict(state_dict)
-            self.model.to(device)
+    with torch.no_grad():
+        policy_logits = model(X)
 
-            # Print device information
-            print(f"Model loaded on device: {device}")
-            if str(device) == "cpu" and "cuda" in str(
-                next(self.model.parameters()).device
-            ):
-                print(
-                    "Warning: Model was trained on GPU but running on CPU. Performance may be slower."
-                )
-        except Exception as e:
-            print(f"Error loading model: {e}")
-            raise
+    logits = policy_logits[0].view(-1)
 
-        self.board = chess.Board()
+    # Apply temperature
+    if temperature != 1.0:
+        logits = logits / temperature
 
-    def reset(self):
-        """Reset the chess board to starting position."""
-        self.board.reset()
+    probs = torch.softmax(logits, dim=0)
+    legal_moves = list(board.legal_moves)
 
-    def get_move(self, temperature=0.1):
-        """
-        Get Athena's move for the current board position.
+    if not legal_moves:
+        return None, None
 
-        Args:
-            temperature (float): Controls randomness in move selection (0 = always best move)
+    idxs = torch.tensor(
+        [aegis.flat_index_of_move(m) for m in legal_moves], device=device
+    )
+    move_probs = probs[idxs].clone()
 
-        Returns:
-            chess.Move: The selected move
-        """
-        # Encode current board position
-        fen = self.board.fen()
-        input_tensor = self.model.encode_input([fen]).to(self.device)
+    # Penalize moves that lead to repetition
+    for i, move in enumerate(legal_moves):
+        board.push(move)
+        if board.is_repetition(2):
+            move_probs[i] *= repetition_penalty
+        board.pop()
 
-        # Get model predictions
-        with torch.no_grad():
-            policy, value = self.model(input_tensor)
-            print(
-                f"Position evaluation (centipawns): {self.model.decode_value_output(value).item():.1f}"
-            )
+    # Get top 2 moves
+    top2_indices = torch.topk(move_probs, k=min(2, len(legal_moves))).indices
+    best_move = legal_moves[int(top2_indices[0])]
+    ponder_move = legal_moves[int(top2_indices[1])] if len(top2_indices) > 1 else None
 
-            # Print policy information
-            policy_np = policy.squeeze().cpu().numpy()
-            print("\nFrom square probabilities:")
-            self._print_chessboard(policy_np[0])
-            print("\nTo square probabilities:")
-            self._print_chessboard(policy_np[1])
+    return best_move, ponder_move
 
-        legal_moves = list(self.board.legal_moves)
+
+def play_single_game(
+    model: torch.nn.Module,
+    device: torch.device,
+    *,
+    max_plies: int = 512,
+    start_fen: str = None,
+    repetition_penalty: float = 0.5,
+    temperature: float = 1.0,
+    ponder_frequency: float = 0.1,
+):
+    """Enhanced game play with more strategic options."""
+    board = chess.Board(fen=start_fen) if start_fen else chess.Board()
+    game = chess.pgn.Game()
+    node = game
+    ply = 0
+    stats = defaultdict(int)
+
+    # Game headers
+    if start_fen:
+        game.headers["FEN"] = start_fen
+    game.headers["Event"] = "Athena Self-Play"
+    game.headers["Round"] = "1"
+
+    while not board.is_game_over() and ply < max_plies:
+        # Occasionally use ponder move instead of best move
+        use_ponder = random.random() < ponder_frequency and ply > 10
+
+        best_move, ponder_move = policy_move(
+            model,
+            board,
+            device,
+            repetition_penalty=repetition_penalty,
+            temperature=temperature,
+        )
+
+        if best_move is None:
+            break
+
+        move_to_play = ponder_move if (use_ponder and ponder_move) else best_move
+
+        # Record stats
+        stats["moves"] += 1
+        if board.is_capture(move_to_play):
+            stats["captures"] += 1
+        if move_to_play == ponder_move:
+            stats["ponder_moves"] += 1
+
+        board.push(move_to_play)
+        node = node.add_variation(move_to_play)
+        ply += 1
+
+    # Update game result and stats
+    game.headers["Result"] = board.result()
+    game.headers["PlyCount"] = str(ply)
+    game.headers["AthenaStats"] = str(dict(stats))
+
+    return game
+
+
+def generate_random_fen(diversity: int = 4):
+    """Generate more diverse starting positions."""
+    board = chess.Board()
+    for _ in range(random.randint(1, diversity)):
+        legal_moves = list(board.legal_moves)
         if not legal_moves:
-            return None
-
-        # Calculate move scores
-        move_scores = []
-        for move in legal_moves:
-            from_sq = (7 - (move.from_square // 8), move.from_square % 8)
-            to_sq = (7 - (move.to_square // 8), move.to_square % 8)
-
-            # Multiply from and to probabilities
-            score = (
-                policy_np[0, from_sq[0], from_sq[1]] * policy_np[1, to_sq[0], to_sq[1]]
-            )
-            move_scores.append(score)
-
-        move_scores = np.array(move_scores)
-
-        # Apply temperature scaling
-        if temperature > 0:
-            # Convert scores to probabilities with temperature
-            exp_scores = np.exp(np.log(move_scores + 1e-10) / temperature)
-            move_probs = exp_scores / exp_scores.sum()
-        else:
-            # Deterministic selection
-            move_probs = np.zeros_like(move_scores)
-            move_probs[np.argmax(move_scores)] = 1.0
-
-        # Select a move
-        selected_idx = (
-            np.random.choice(len(legal_moves), p=move_probs)
-            if temperature > 0
-            else np.argmax(move_probs)
-        )
-        best_move = legal_moves[selected_idx]
-
-        # Print move information
-        print(f"\nSelected move: {best_move.uci()}")
-        print(f"Move probability: {move_probs[selected_idx]:.4f}")
-        if temperature > 0:
-            print(f"Temperature: {temperature} (higher = more random)")
-
-        return best_move
-
-    def _print_chessboard(self, matrix):
-        """Helper to print an 8x8 matrix in chess board format."""
-        print("   a     b     c     d     e     f     g     h")
-        for i, row in enumerate(matrix):
-            print(8 - i, end=" ")
-            for val in row:
-                print(f"{val:.3f}", end=" ")
-            print()
-
-    def make_move(self, move):
-        """
-        Make a move on the board.
-
-        Args:
-            move: Either a chess.Move object or a string in UCI format
-        """
-        if isinstance(move, str):
-            move = chess.Move.from_uci(move)
-        self.board.push(move)
-
-    def play_human(self, human_color=chess.WHITE):
-        """
-        Play a game against Athena in the terminal.
-
-        Args:
-            human_color: chess.WHITE or chess.BLACK (default: human plays as white)
-        """
-        print("Starting new game!")
-        print(
-            "Athena is playing as", "Black" if human_color == chess.WHITE else "White"
-        )
-        print("Type 'quit' to exit or 'reset' to start a new game")
-
-        self.reset()
-
-        while not self.board.is_game_over():
-            print("\n" + str(self.board) + "\n")
-
-            if self.board.turn == human_color:
-                # Human's turn
-                while True:
-                    move_input = input(
-                        "Your move (in UCI format, e.g. 'e2e4'): "
-                    ).strip()
-
-                    if move_input.lower() == "quit":
-                        return
-                    if move_input.lower() == "reset":
-                        self.reset()
-                        print("\nGame reset!")
-                        break
-
-                    try:
-                        move = chess.Move.from_uci(move_input)
-                        if move in self.board.legal_moves:
-                            self.make_move(move)
-                            break
-                        else:
-                            print("Illegal move! Try again.")
-                    except:
-                        print("Invalid move format! Try again.")
-            else:
-                # Athena's turn
-                print("Athena is thinking...")
-                move = self.get_move(temperature=0.1)
-                self.make_move(move)
-                print(f"Athena plays: {move.uci()}")
-
-        print("\nGame over!")
-        print("Final position:")
-        print("\n" + str(self.board) + "\n")
-        print("Result:", self.board.result())
-
-    def self_play(self, max_moves=200):
-        """
-        Watch Athena play against itself.
-
-        Args:
-            max_moves: Maximum number of moves before ending the game
-        """
-        print("Athena self-play mode")
-        print("Press Enter to advance moves or type 'quit' to exit")
-
-        self.reset()
-        move_count = 0
-
-        while not self.board.is_game_over() and move_count < max_moves:
-            print("\nMove", move_count + 1)
-            print("\n" + str(self.board) + "\n")
-
-            user_input = input("Press Enter to continue or 'quit' to exit: ").strip()
-            if user_input.lower() == "quit":
-                return
-
-            move = self.get_move(temperature=0.1)
-            self.make_move(move)
-            print(f"Athena plays: {move.uci()}")
-            move_count += 1
-
-        print("\nGame over!")
-        print("Final position:")
-        print("\n" + str(self.board) + "\n")
-        print("Result:", self.board.result())
+            break
+        move = random.choice(legal_moves)
+        board.push(move)
+    return board.fen()
 
 
-if __name__ == "__main__":
-    import argparse
-
-    parser = argparse.ArgumentParser(description="Athena Chess Engine")
+def main():
+    parser = argparse.ArgumentParser(description="Enhanced Athena self-play")
     parser.add_argument(
-        "--model", type=str, required=True, help="Path to trained model"
+        "--games", type=int, default=10, help="Number of games to generate"
     )
     parser.add_argument(
-        "--mode",
-        choices=["human", "self"],
-        default="human",
-        help="Play against human or self-play",
+        "--checkpoint", type=str, required=True, help="Model checkpoint path"
     )
     parser.add_argument(
-        "--color",
-        choices=["white", "black"],
-        default="white",
-        help="Color to play as when playing against human",
+        "--out", type=str, default="selfplay_games.pgn", help="Output PGN file"
+    )
+    parser.add_argument(
+        "--device", type=str, default="cuda" if torch.cuda.is_available() else "cpu"
+    )
+    parser.add_argument(
+        "--random_start", action="store_true", help="Use random starting positions"
+    )
+    parser.add_argument(
+        "--repetition_penalty",
+        type=float,
+        default=0.9,
+        help="Penalty for repetition (0-1)",
+    )
+    parser.add_argument(
+        "--temperature", type=float, default=1.0, help="Move selection temperature"
+    )
+    parser.add_argument(
+        "--ponder_freq", type=float, default=0.1, help="Frequency of using ponder moves"
     )
     args = parser.parse_args()
 
-    engine = AthenaChessEngine(args.model)
+    device = torch.device(args.device)
+    model = load_model(args.checkpoint, device)
+    out_path = Path(args.out)
+    out_path.parent.mkdir(parents=True, exist_ok=True)
 
-    if args.mode == "human":
-        human_color = chess.WHITE if args.color == "white" else chess.BLACK
-        engine.play_human(human_color)
-    else:
-        engine.self_play()
+    print(f"Starting self-play with {args.games} games")
+    print(
+        f"Settings: repetition_penalty={args.repetition_penalty}, temperature={args.temperature}"
+    )
+
+    stats = defaultdict(int)
+    total_start = time.time()
+
+    with open(out_path, "w", encoding="utf-8") as pgn_file:
+        for g in range(args.games):
+            start_fen = generate_random_fen() if args.random_start else None
+            start_time = time.time()
+
+            game = play_single_game(
+                model,
+                device,
+                start_fen=start_fen,
+                repetition_penalty=args.repetition_penalty,
+                temperature=args.temperature,
+                ponder_frequency=args.ponder_freq,
+            )
+
+            print(game, file=pgn_file, end="\n\n")
+            elapsed = time.time() - start_time
+
+            # Update statistics
+            result = game.headers["Result"]
+            stats[result] += 1
+            stats["total_time"] += elapsed
+
+            print(
+                f"Game {g+1}/{args.games} ({result}) in {elapsed:.1f}s "
+                f"Plies: {game.headers['PlyCount']}"
+            )
+
+    # Print summary
+    print("\n=== Summary ===")
+    print(f"Completed {args.games} games in {time.time() - total_start:.1f}s")
+    print("Results:")
+    for result, count in stats.items():
+        if result != "total_time":
+            print(f"{result}: {count} ({count/args.games:.1%})")
+    print(f"Saved to {out_path}")
+
+
+if __name__ == "__main__":
+    main()
