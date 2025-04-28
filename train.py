@@ -7,7 +7,14 @@ import torch.nn.functional as F
 from torch.utils.data import DataLoader
 
 import wandb
-from architecture import Athena, AthenaV2, AthenaV3, AthenaV4, AthenaV5, AthenaV6_PPO
+from architecture import (
+    Athena,
+    AthenaV2,
+    AthenaV3,
+    AthenaV4,
+    AthenaV5,
+    AthenaV6_PPO,
+)
 from datasets.aegis.dataset import AegisDataset
 import chess
 
@@ -28,6 +35,8 @@ USE_WANDB = cfg.get("use_wandb", False)
 NUM_RES_BLOCKS = cfg.get("num_res_blocks", 19)
 WIDTH = cfg.get("width", 256)
 TRAIN_SAMPLES_PER_EPOCH = cfg.get("train_samples_per_epoch", 10_000_000)
+POLICY_LOSS_WEIGHT = cfg.get("policy_loss_weight", 1.0)
+VALUE_LOSS_WEIGHT = cfg.get("value_loss_weight", 1.0)
 
 # ─────────────────────────── DATA ─────────────────────────────
 aegis = AegisDataset(n=TRAIN_SAMPLES_PER_EPOCH)
@@ -44,7 +53,7 @@ train_loader = DataLoader(aegis, batch_size=BATCH_SIZE, shuffle=True, drop_last=
 test_loader = DataLoader(test_aegis, batch_size=BATCH_SIZE)
 
 # ─────────────────────────── MODEL ────────────────────────────
-model = AthenaV6_PPO(input_channels=18, width=WIDTH, num_res_blocks=NUM_RES_BLOCKS)
+model = Athena(input_channels=18, width=WIDTH, num_res_blocks=NUM_RES_BLOCKS)
 model = model.to(model.device)
 optimizer = torch.optim.Adam(model.parameters(), lr=LR)
 scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=LR_DECAY_RATE)
@@ -98,7 +107,10 @@ def loss_function(
     loss_value = F.mse_loss(v_pred, v_tgt)
 
     loss = w_policy * loss_policy + w_value * loss_value
-    return loss, {"policy": loss_policy.detach(), "value": loss_value.detach()}
+    return loss, {
+        "policy": loss_policy.detach() * w_policy,
+        "value": loss_value.detach() * w_value,
+    }
 
 
 # ─────────────────────────── EVAL ─────────────────────────────
@@ -130,7 +142,14 @@ def evaluate(model, repetition_penalty=0.9):
             P_pred, V_pred = model(X)
 
             # Calculate loss
-            loss, _ = loss_function(P_pred, V_pred, P_tgt, V_tgt)
+            loss, _ = loss_function(
+                P_pred,
+                V_pred,
+                P_tgt,
+                V_tgt,
+                w_value=VALUE_LOSS_WEIGHT,
+                w_policy=POLICY_LOSS_WEIGHT,
+            )
             batch_size = X.size(0)
             metrics["total_loss"] += loss.item() * batch_size
 
@@ -250,7 +269,14 @@ for epoch in range(NUM_EPOCHS):
         X, P_tgt, V_tgt = (t.to(model.device) for t in (X, P_tgt, V_tgt))
 
         P_pred, V_pred = model(X)
-        loss, parts = loss_function(P_pred, V_pred, P_tgt, V_tgt)
+        loss, parts = loss_function(
+            P_pred,
+            V_pred,
+            P_tgt,
+            V_tgt,
+            w_value=VALUE_LOSS_WEIGHT,
+            w_policy=POLICY_LOSS_WEIGHT,
+        )
 
         optimizer.zero_grad()
         loss.backward()

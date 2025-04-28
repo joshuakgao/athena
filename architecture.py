@@ -47,10 +47,11 @@ class Athena(nn.Module):
         self.policy_bn = nn.BatchNorm2d(73)
 
         # --- Value Head ---
-        self.value_conv = nn.Conv2d(width, 1, kernel_size=1)  # Reduce to 1 channel
-        self.value_bn = nn.BatchNorm2d(1)
-        self.value_fc1 = nn.Linear(8 * 8, 256)  # Intermediate hidden layer
-        self.value_fc2 = nn.Linear(256, 1)  # Output a single scalar value
+        self.value_conv = nn.Conv2d(width, 16, kernel_size=1)
+        self.value_bn = nn.BatchNorm2d(16)
+        self.value_fc1 = nn.Linear(16 * 8 * 8, 256)  # Intermediate hidden layer
+        self.value_fc2 = nn.Linear(256, 64)  # Output a single scalar value
+        self.value_fc3 = nn.Linear(64, 1)  # Final output layer
 
     def forward(self, x):
         x = x.to(self.device)
@@ -66,7 +67,9 @@ class Athena(nn.Module):
         value_x = F.relu(self.value_bn(self.value_conv(x)))  # [batch, 1, 8, 8]
         value_x = value_x.view(value_x.size(0), -1)  # Flatten to [batch, 8*8 = 64]
         value_x = F.relu(self.value_fc1(value_x))  # [batch, 256]
-        value_output = torch.tanh(self.value_fc2(value_x))  # [batch, 1]
+        value_x = F.relu(self.value_fc2(value_x))  # [batch, 64]
+        value_x = self.value_fc3(value_x)  # [batch, 1]
+        value_output = torch.tanh(value_x)  # [batch, 1]
 
         # Return both policy logits and the value prediction
         return policy_x, value_output

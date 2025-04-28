@@ -1,12 +1,14 @@
 {
-    "model_name": "1.50_AthenaV6_PPO-19.128",
-    "description": "Prepping for reinforcement learning with PPO",
+    "model_name": "1.51_Athena-19.128-lr0.0006",
+    "description": "Go to simpler model.",
     "num_epochs": 100,
-    "lr": 0.0006,
+    "lr": 0.006,
     "lr_decay_rate": 0.99,
     "batch_size": 256,
     "use_wandb": true,
     "num_res_blocks": 19,
     "width": 128,
-    "train_samples_per_epoch": 10000000
+    "train_samples_per_epoch": 10000000,
+    "policy_loss_weight": 1,
+    "value_loss_weight": 1
 }
