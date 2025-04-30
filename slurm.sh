@@ -18,10 +18,6 @@
 # /project/hoskere/jkgao/.conda/envs/athena/bin/python train.py
 
 # FOR SAIL:
-cd /opt/miniconda3/bin
-source activate
-conda activate athena
-
 cd ~/athena
 free -h
 ~/.conda/envs/athena/bin/python train.py

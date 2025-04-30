@@ -15,6 +15,7 @@ from utils.logger import logger
 # Get training configs
 with open("train_config.json", "r") as f:
     config = json.load(f)
+    logger.info(config)
     MODEL_NAME = config.get("model_name")
     NUM_EPOCHS = config["num_epochs"]
     LR = config["lr"]
