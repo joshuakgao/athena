@@ -270,113 +270,44 @@ class AthenaV4(nn.Module):
         x = self.body(self.stem(x))
 
         # Policy head
-        p = F.relu(self.pol_norm(self.pol_conv(x)))  # [B,73,8,8]
-        p = self.pol_dropout(p)  # Apply dropout
-
-        # Value head
-        v = F.relu(self.val_norm(self.val_conv(x)))
-        v = self.val_dropout(v)  # Apply dropout
-        v = F.adaptive_avg_pool2d(v, 1).view(x.size(0), 1)
-        v = self.val_fc_dropout(v)  # Apply dropout before FC
-        v = torch.tanh(self.val_fc(v))  # [B,1]
-
-        return p, v
+        policy_x = F.relu(self.policy_bn(self.policy_conv(x)))  # [batch, 2, 8, 8]
+        policy_x = policy_x.view(policy_x.size(0), -1)  # Flatten to [batch, 2*8*8]
+        policy_logits = self.policy_fc(policy_x)  # Linear layer to [batch, 2*8*8]
+        policy_logits = policy_logits.view(-1, 2, 8, 8)  # Reshape to [batch, 2, 8, 8]
+        return policy_logits
 
 
-class AthenaV5(nn.Module):
-    def __init__(self, input_channels=119, width=256, num_res_blocks=19, device="auto"):
-        super().__init__()
-        self.device = device_selector(device, label="AthenaV5")
+class AthenaV6(nn.Module):
+    def __init__(self, input_channels=9, num_res_blocks=19, width=128, device="auto"):
+        super(AthenaV6, self).__init__()
+        self.device = device_selector(device, label="AthenaV6")
 
-        # Constants
-        self.input_channels = input_channels
-        self.width = width
-        self.num_res_blocks = num_res_blocks
-        self.board_size = 8
-        self.policy_head_size = 73 * 8 * 8  # For 73 move types policy head
-        self.value_head_size = 1
+        # Initial convolutional layer
+        self.conv1 = nn.Conv2d(input_channels, width, kernel_size=3, padding=1)
+        self.bn1 = nn.BatchNorm2d(width)
 
-        # Initial convolution block
-        self.conv_block = nn.Sequential(
-            nn.Conv2d(self.input_channels, self.width, kernel_size=3, padding=1),
-            nn.BatchNorm2d(self.width),
-            nn.ReLU(),
-        ).to(self.device)
-
-        # Residual tower using the improved Block class from V4
-        self.residual_tower = nn.Sequential(
-            *[
-                Block(self.width, norm=nn.BatchNorm2d)
-                for _ in range(self.num_res_blocks)
-            ]
-        ).to(self.device)
-
-        # Policy head (outputs 73 channels for move types)
-        self.policy_head = nn.Sequential(
-            nn.Conv2d(self.width, 73, kernel_size=1),
-            nn.BatchNorm2d(73),
-            nn.ReLU(),
-        ).to(self.device)
-
-        # Value head
-        self.value_head = nn.Sequential(
-            nn.Conv2d(self.width, 1, kernel_size=1),
-            nn.BatchNorm2d(1),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(self.board_size * self.board_size, 256),
-            nn.ReLU(),
-            nn.Linear(256, self.value_head_size),
-            nn.Tanh(),
-        ).to(self.device)
-
-    def forward(self, x):
-        x = x.to(self.device)
-        x = self.conv_block(x)
-        x = self.residual_tower(x)
-
-        policy = self.policy_head(x)  # [B, 73, 8, 8]
-        value = self.value_head(x)  # [B, 1]
-
-        return policy, value
-
-
-class AthenaV6_PPO(nn.Module):
-    def __init__(self, input_channels=21, num_res_blocks=19, width=128, device="auto"):
-        super().__init__()
-        self.device = device_selector(device, label="AthenaV6_PPO")
-
-        # Shared backbone (same as original)
-        self.backbone = nn.Sequential(
-            nn.Conv2d(input_channels, width, 3, padding=1),
-            nn.BatchNorm2d(width),
-            nn.ReLU(),
+        # Residual blocks
+        self.residual_blocks = nn.Sequential(
             *[ResidualBlock(width) for _ in range(num_res_blocks)]
         )
 
-        # Policy Head (73x8x8 logits)
-        self.policy_head = nn.Sequential(
-            nn.Conv2d(width, 73, 1),
-            nn.BatchNorm2d(73),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(73 * 8 * 8, 73 * 8 * 8),
-        )
-
-        # Value Head (scalar evaluation)
-        self.value_head = nn.Sequential(
-            nn.Conv2d(width, 3, 1),  # Reduce channels
-            nn.BatchNorm2d(3),
-            nn.ReLU(),
-            nn.Flatten(),
-            nn.Linear(3 * 8 * 8, 256),
-            nn.ReLU(),
-            nn.Linear(256, 1),
-            nn.Tanh(),  # Output in [-1, 1]
-        )
+        # Policy head (outputs 73x8x8 layers)
+        self.policy_conv = nn.Conv2d(width, 73, kernel_size=1)  # Reduce channels to 73
+        self.policy_bn = nn.BatchNorm2d(73)
+        self.policy_fc = nn.Linear(
+            73 * 8 * 8, 8 * 8 * 73
+        )  # Flatten and map to (8x8x73)
 
     def forward(self, x):
-        features = self.backbone(x)
-        logits = self.policy_head(features).view(-1, 73, 8, 8)
-        value = self.value_head(features)
-        return logits, value
+        # Initial convolution + batch normalization
+        x = F.relu(self.bn1(self.conv1(x)))
+
+        # Residual blocks
+        x = self.residual_blocks(x)
+
+        # Policy head
+        policy_x = F.relu(self.policy_bn(self.policy_conv(x)))  # [batch, 73, 8, 8]
+        policy_x = policy_x.view(policy_x.size(0), -1)  # Flatten to [batch, 73*8*8]
+        policy_logits = self.policy_fc(policy_x)  # Linear layer to [batch, 73*8*8]
+        policy_logits = policy_logits.view(-1, 73, 8, 8)  # Reshape to [batch, 73, 8, 8]
+        return policy_logits

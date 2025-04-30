@@ -18,14 +18,25 @@ import chess
 import chess.pgn
 
 # Project-local imports
+<<<<<<< HEAD
 from architecture import AthenaV3
 from datasets.aegis.dataset import _encode_position, _flat_index_of_move
+=======
+from architecture import AthenaV6
+from datasets.aegis.dataset import AegisDataset
+
+aegis = AegisDataset(no_load=True)
+>>>>>>> chessbench
 
 
 def load_model(checkpoint: str, device: torch.device, *, num_res_blocks: int = 19):
     """Load model with error handling."""
     try:
+<<<<<<< HEAD
         model = AthenaV3(input_channels=119, num_res_blocks=num_res_blocks).to(device)
+=======
+        model = AthenaV6(input_channels=21, num_res_blocks=num_res_blocks).to(device)
+>>>>>>> chessbench
         state = torch.load(checkpoint, map_location=device)
         model.load_state_dict(state)
         model.eval()
@@ -48,10 +59,17 @@ def policy_move(
     - Temperature-controlled randomness
     - Top-2 move consideration
     """
+<<<<<<< HEAD
     X = _encode_position([board.fen()], [[]]).to(device)
 
     with torch.no_grad():
         policy_logits, _ = model(X)
+=======
+    X = aegis.encode_position([board.fen()]).to(device)
+
+    with torch.no_grad():
+        policy_logits = model(X)
+>>>>>>> chessbench
 
     logits = policy_logits[0].view(-1)
 
@@ -65,7 +83,13 @@ def policy_move(
     if not legal_moves:
         return None, None
 
+<<<<<<< HEAD
     idxs = torch.tensor([_flat_index_of_move(m) for m in legal_moves], device=device)
+=======
+    idxs = torch.tensor(
+        [aegis.flat_index_of_move(m) for m in legal_moves], device=device
+    )
+>>>>>>> chessbench
     move_probs = probs[idxs].clone()
 
     # Penalize moves that lead to repetition

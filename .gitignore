@@ -6,11 +6,8 @@ checkpoints/
 wandb/
 nohup.out
 *.o*
-daily_challenge_times.txt
+datasets/aegis/data_
 selfplay_games.pgn
 
-# aegis generation temp files
-datasets/aegis/temp_parquet
-datasets/aegis/sort_temp
-datasets/aegis/temp_parquet.zip
-datasets/aegis/aegis.zip
+
+datasets/chessbench/data/*
