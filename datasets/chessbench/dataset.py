@@ -262,7 +262,7 @@ class BagWriter:
 class BagDataSource:
     """PyGrain-compatible dat'a source for bagz files."""
 
-    def __init__(self, path: epath.PathLike) -> None:
+    def __init__(self, path) -> None:
         """Creates a new BagDataSource object.
 
         Args:
