@@ -1,22 +1,14 @@
 import bisect
-import json
 import os
-import struct
 import sys
 from pathlib import Path
-from typing import Dict, List, Optional, Tuple, Union
+from typing import Dict, List, Optional, Tuple
 
-import chess
-import numpy as np
-import torch
 from torch.utils.data import Dataset
-import math
-from tqdm import tqdm
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-
-from datasets.chessbench.utils.bagz import BagReader
 from datasets.chessbench.utils import constants
+from datasets.chessbench.utils.bagz import BagReader
 
 
 class ChessbenchDataset(Dataset):
@@ -95,8 +87,3 @@ class ChessbenchDataset(Dataset):
     def num_bags(self) -> int:
         """Return the number of bag files in this dataset"""
         return len(self.bags)
-
-
-dataset = ChessbenchDataset("datasets/chessbench/data", mode="train")
-fen, move, win_prob = dataset[5]
-print(f"FEN: {fen}, Move: {move}, Win Prob: {win_prob}")
