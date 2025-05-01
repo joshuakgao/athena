@@ -1,261 +1,234 @@
-import json
-import os
-import sys
-
-import chess
 import torch
-import torch.nn.functional as F
+import torch.nn as nn
+import torch.optim as optim
 from torch.utils.data import DataLoader
-
+import numpy as np
+from tqdm import tqdm
 import wandb
-from architecture import Athena, AthenaV6
-from datasets.aegis.dataset import AegisDataset
-import chess
-
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
-from utils.logger import logger
-
-# ─────────────────────────── CONFIG ───────────────────────────
-with open("train_config.json", "r") as f:
-    config = json.load(f)
-    logger.info(config)
-    MODEL_NAME = config.get("model_name")
-    NUM_EPOCHS = config["num_epochs"]
-    LR = config["lr"]
-    LR_DECAY_RATE = config.get("lr_decay_rate", 0.1)  # Default to 0.1
-    BATCH_SIZE = config["batch_size"]
-    TEST_SPLIT_RATIO = config.get("test_split_ratio", 0.2)  # Default to 20% test data
-    USE_WANDB = config.get("use_wandb", False)
-    NUM_RES_BLOCKS = config.get("num_res_blocks", 19)
-    WIDTH = config.get("width", 128)  # Default width for the model
+import os
+from datetime import datetime
+from datasets.chessbench.dataset import ChessbenchDataset
+from architecture import Athena
+from embeddings import encode_action_value, encode_win_prob, decode_win_prob
 
 
-# Create the dataset and split it into training and testing sets
-aegis = AegisDataset()
-dataset_size = len(aegis)
-test_size = int(TEST_SPLIT_RATIO * dataset_size)
-train_size = dataset_size - test_size
-iters_in_an_epoch = max(len(aegis) // BATCH_SIZE, 1)
-EVAL_MODEL_INTERVAL = max(iters_in_an_epoch // 10, 1)
-CHECK_METRICS_INTERVAL = max(iters_in_an_epoch // 100, 1)
-LR_DECAY_STEPS = iters_in_an_epoch
+def train_athena(config):
+    # Define model
+    model = Athena(num_res_blocks=config["num_res_blocks"], width=config["width"])
+    model.to(model.device)
 
+    # Initialize WandB
+    if config["use_wandb"]:
+        wandb.init(project="athena_chess", config=config, name=config["model_name"])
+        wandb.watch(model)
 
-logger.info(
-    f"Dataset size: {dataset_size}, Train size: {train_size}, Test size: {test_size}"
-)
+    # Create datasets
+    train_dataset = ChessbenchDataset("datasets/chessbench/data", mode="train")
+    val_dataset = ChessbenchDataset("datasets/chessbench/data", mode="test")
 
-train_dataset, test_dataset = random_split(aegis, [train_size, test_size])
+    # Create data loaders
+    train_loader = DataLoader(
+        train_dataset,
+        batch_size=config["batch_size"],
+        shuffle=True,
+        num_workers=config["num_workers"],
+        pin_memory=True,
+    )
+    val_loader = DataLoader(
+        val_dataset,
+        batch_size=config["batch_size"] * 2,  # Larger batch for validation
+        shuffle=False,
+        num_workers=config["num_workers"],
+        pin_memory=True,
+    )
 
-# Create DataLoaders for training and testing
-train_dataloader = DataLoader(
-    train_dataset, batch_size=BATCH_SIZE, shuffle=True, drop_last=True
-)
-test_dataloader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+    # Loss and optimizer
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=config["lr"],
+    )
+    scheduler = torch.optim.lr_scheduler.StepLR(
+        optimizer, step_size=1, gamma=config["lr_decay_rate"]
+    )
 
-# Create the model, loss function, and optimizer
-model = AthenaV6(input_channels=21, num_res_blocks=NUM_RES_BLOCKS)
-model.to(model.device)
-optimizer = torch.optim.Adam(model.parameters(), lr=LR)
-scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=LR_DECAY_RATE)
+    # Calculate validation frequency (10 times per epoch)
+    val_frequency = max(1, len(train_loader) // 10)
+    train_log_frequency = max(1, len(train_loader) // 100)
 
-# optional experiment tracker
-if USE_WANDB:
-    wandb.init(project="athena_chess", config=cfg, name=MODEL_NAME)
-    wandb.watch(model)
+    # Training loop
+    best_val_loss = float("inf")
 
+    for epoch in range(config["epochs"]):
+        model.train()
+        train_loss = 0.0
+        correct = 0
+        total = 0
 
-def loss_function(
-    policy_logits: torch.Tensor,  # [B, 73, 8, 8]  ← model output
-    policy_target,  # one-hot tensor  *or*  list[str|Move]
-):
-    """
-    Cross-entropy on the single correct move  +  value MSE.
+        # Training phase with periodic validation
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['epochs']}")
+        for batch_idx, (fens, moves, win_probs) in enumerate(pbar):
 
-    • `policy_target` can be
-        – a one-hot tensor of shape [B,73,8,8]  (what your dataloader yields now), or
-        – a list of moves (UCI strings or chess.Move objects).
-    """
-    B = policy_logits.size(0)
-    logits_flat = policy_logits.view(B, -1)  # (B, 4672)
+            # Skip batches with None win probabilities (if any)
+            if win_probs[0] is None:
+                continue
 
-    # -------- target index -------------------------------------------------
-    if torch.is_tensor(policy_target):
-        # one-hot → index
-        target_idx = policy_target.view(B, -1).argmax(dim=1)
-    else:
-        # list of moves → index
-        moves = policy_target
-        if isinstance(moves[0], str):  # accept UCI strings
-            moves = [chess.Move.from_uci(m) for m in moves]
-        target_idx = torch.tensor(
-            [aegis.flat_index_of_move(m) for m in moves],
-            device=logits_flat.device,
-            dtype=torch.long,
-        )
+            # Convert FEN to input tensor
+            inputs = []
+            targets = []
+            for fen, move, win_prob in zip(fens, moves, win_probs):
+                # Encode FEN
+                fen_tensor = (
+                    torch.from_numpy(encode_action_value(fen, move))
+                    .permute(2, 0, 1)
+                    .float()
+                )
+                inputs.append(fen_tensor)
 
-    # -------- losses -------------------------------------------------------
-    loss_policy = F.cross_entropy(logits_flat, target_idx)
+                # Encode win probability
+                target = torch.from_numpy(encode_win_prob(win_prob)).float()
+                targets.append(target)
 
-    return loss_policy
+            inputs = torch.stack(inputs).to(model.device)
+            targets = torch.stack(targets).to(model.device)
 
-
-def evaluate(repetition_penalty=0.9):
-    """
-    Enhanced evaluation function with:
-    - Ponder move analysis
-    - Repetition avoidance
-    - Detailed move statistics
-    - Better logging
-    """
-    model.eval()
-    metrics = {
-        "total": 0,
-        "correct": 0,
-        "top2_correct": 0,  # Count if correct move is in top 2
-        "total_loss": 0.0,
-    }
-
-    printed_samples = 0
-    max_samples_to_print = 20
-
-    with torch.no_grad():
-        for X, Y, fens, best_moves in test_dataloader:
-            X = X.to(model.device)
-            Y = Y.to(model.device)
-            preds = model(X)
+            # Forward pass
+            optimizer.zero_grad()
+            outputs = model(inputs)
 
             # Calculate loss
-            loss = loss_function(preds, Y)
-            batch_size = X.size(0)
-            metrics["total_loss"] += loss.item() * batch_size
+            loss = criterion(outputs, targets)
 
-            # Decode predicted moves
-            pred_moves = aegis.decode_move(
-                preds, fens, repetition_penalty=repetition_penalty
+            # Backward pass and optimize
+            loss.backward()
+            optimizer.step()
+
+            # Calculate accuracy
+            preds = outputs.argmax(dim=1)
+            true_labels = targets.argmax(dim=1)
+            correct += (preds == true_labels).sum().item()
+            total += preds.size(0)
+
+            # Update statistics
+            train_loss += loss.item()
+            avg_loss = train_loss / (batch_idx + 1)
+            accuracy = correct / total
+
+            pbar.set_postfix(
+                {"loss": avg_loss, "acc": accuracy, "lr": scheduler.get_last_lr()[0]}
             )
 
-            # Decode target moves
-            target_moves = [
-                aegis.decode_move(Y[i].unsqueeze(0), [fens[i]])[0][0]
-                for i in range(batch_size)
-            ]
-
-            for i, ((best_move, ponder_move), target_move, fen) in enumerate(
-                zip(pred_moves, target_moves, fens)
-            ):
-                if best_move is None or target_move is None:
-                    continue
-
-                # Convert to strings for comparison
-                best_move_str = str(best_move)
-                target_move_str = str(target_move)
-                ponder_move_str = str(ponder_move) if ponder_move else None
-
-                # Update statistics
-                metrics["correct"] += best_move_str == target_move_str
-                metrics["top2_correct"] += (best_move_str == target_move_str) or (
-                    ponder_move_str and ponder_move_str == target_move_str
+            if config["use_wandb"] and (batch_idx + 1) % train_log_frequency == 0:
+                # Log training metrics to WandB
+                wandb.log(
+                    {
+                        "epoch": epoch + (batch_idx + 1) / len(train_loader),
+                        "train_loss": avg_loss,
+                        "train_accuracy": accuracy,
+                        "lr": scheduler.get_last_lr()[0],
+                    }
                 )
-                metrics["total"] += 1
 
-                # Print sample predictions
-                if printed_samples < max_samples_to_print:
-                    status = "✅" if best_move_str == target_move_str else "❌"
-                    top2_status = (
-                        "(top2)"
-                        if ponder_move_str and ponder_move_str == target_move_str
-                        else ""
+            # Perform validation at regular intervals
+            if (batch_idx + 1) % val_frequency == 0 or (batch_idx + 1) == len(
+                train_loader
+            ):
+                model.eval()
+                val_loss = 0.0
+                val_correct = 0
+                val_total = 0
+
+                with torch.no_grad():
+                    for val_batch_idx, (
+                        val_fens,
+                        val_moves,
+                        val_win_probs,
+                    ) in enumerate(val_loader):
+                        if val_win_probs[0] is None:
+                            continue
+
+                        val_inputs = []
+                        val_targets = []
+                        for fen, move, win_prob in zip(
+                            val_fens, val_moves, val_win_probs
+                        ):
+                            fen_tensor = (
+                                torch.from_numpy(encode_action_value(fen, move))
+                                .permute(2, 0, 1)
+                                .float()
+                            )
+                            val_inputs.append(fen_tensor)
+
+                            target = torch.from_numpy(encode_win_prob(win_prob)).float()
+                            val_targets.append(target)
+
+                        val_inputs = torch.stack(val_inputs).to(model.device)
+                        val_targets = torch.stack(val_targets).to(model.device)
+
+                        val_outputs = model(val_inputs)
+
+                        print("Outputs:", val_outputs[:5])
+                        print("Targets:", val_targets[:5])
+
+                        loss = criterion(val_outputs, val_targets)
+
+                        val_loss += loss.item()
+                        preds = val_outputs.argmax(dim=1)
+                        true_labels = val_targets.argmax(dim=1)
+                        val_correct += (preds == true_labels).sum().item()
+                        val_total += preds.size(0)
+
+                avg_val_loss = val_loss / (val_batch_idx + 1)
+                val_accuracy = val_correct / val_total
+
+                # Log metrics to WandB
+                if config["use_wandb"]:
+                    wandb.log(
+                        {
+                            "epoch": epoch,
+                            "train_loss": avg_loss,
+                            "train_accuracy": accuracy,
+                            "val_loss": avg_val_loss,
+                            "val_accuracy": val_accuracy,
+                            "learning_rate": scheduler.get_last_lr()[0],
+                        }
                     )
 
-                    logger.info(
-                        f"FEN: {fen}\n"
-                        f"Move: {best_move_str} {status} {top2_status}\n"
-                        f"Target: {target_move_str}\n"
-                        f"Ponder: {ponder_move_str}\n"
-                        f"{'-'*40}"
-                    )
-                    printed_samples += 1
+                # Save best model
+                if avg_val_loss < best_val_loss:
+                    best_val_loss = avg_val_loss
+                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    model_path = f"athena_best_{timestamp}.pth"
+                    torch.save(model.state_dict(), model_path)
+                    if config["use_wandb"]:
+                        wandb.save(model_path)
+                    print(f"New best model saved with val_loss: {best_val_loss:.4f}")
 
-    # Final metrics calculation
-    results = {
-        "eval_loss": metrics["total_loss"] / metrics["total"],
-        "eval_accuracy": metrics["correct"] / metrics["total"],
-        "top2_accuracy": metrics["top2_correct"] / metrics["total"],
+                model.train()
+        scheduler.step()
+
+    # Cleanup
+    train_dataset.close()
+    val_dataset.close()
+    if config["use_wandb"]:
+        wandb.finish()
+
+
+# Example usage:
+if __name__ == "__main__":
+    # Configuration
+    config = {
+        "model_name": "2.0_Athena",
+        "description": "Use chessbench dataset",
+        "epochs": 100,
+        "lr": 0.00006,
+        "lr_decay_rate": 0.99,
+        "batch_size": 4096,
+        "use_wandb": True,
+        "num_res_blocks": 19,
+        "width": 256,
+        "num_workers": 4,
     }
 
-    logger.info("\nEvaluation Results:")
-    for k, v in results.items():
-        logger.info(f"{k:>25}: {v:.4f}")
-
-    return results
-
-
-# Training loop
-logger.info("Training started")
-
-for epoch in range(NUM_EPOCHS):
-    model.train()
-
-    for batch_idx, (X, Y, fens, best_moves) in enumerate(train_dataloader):
-        # Move data to device
-        X = X.to(model.device)
-        Y = Y.to(model.device)
-
-        # Forward pass
-        pred = model(X)
-
-        # Compute loss
-        loss = loss_function(pred, Y)
-
-        # Backward pass and optimization
-        optimizer.zero_grad()
-        loss.backward()
-        optimizer.step()
-
-        # Log metrics
-        if batch_idx % CHECK_METRICS_INTERVAL == CHECK_METRICS_INTERVAL - 1:
-            lr = scheduler.get_last_lr()[0]
-            logger.info(
-                f"{epoch+1}: {step}/{iters_per_epoch}    loss: {loss:.4f}    policy_loss {parts['policy']:.4f}    value_loss: {parts['value']:.4f}    lr: {lr:.2e}"
-            )
-            if USE_WANDB:
-                wandb.log(
-                    {
-                        "train_loss": loss.item(),
-                        "learning_rate": lr,
-                    }
-                )
-
-        # Evaluate model periodically
-        if batch_idx % EVAL_MODEL_INTERVAL == EVAL_MODEL_INTERVAL - 1:
-            eval_metrics = evaluate()
-            logger.info(
-                f"eval_loss: {eval_metrics['eval_loss']:.4f}    top2_accuracy: {eval_metrics['top2_accuracy']:.3%}   ACCURACY:{eval_metrics['eval_accuracy']:.3%}"
-            )
-
-            if USE_WANDB:
-                wandb.log(
-                    {
-                        "eval_loss": eval_metrics["eval_loss"],
-                        "eval_accuracy": eval_metrics["eval_accuracy"],
-                        "top2_accuracy": eval_metrics["top2_accuracy"],
-                    }
-                )
-
-            if eval_metrics["eval_accuracy"] > best_accuracy:
-                best_accuracy = eval_metrics["eval_accuracy"]
-                os.makedirs("checkpoints", exist_ok=True)
-                torch.save(model.state_dict(), f"checkpoints/{MODEL_NAME}.pt")
-                logger.info(f"New best model saved ({best_accuracy:.3%})")
-
-    scheduler.step()
-
-    # end‑epoch housekeeping
-    scheduler.step()
-    aegis.sample_dataset()  # fresh sample for next epoch
-    logger.info(f"End of epoch {epoch+1} – lr is now {scheduler.get_last_lr()[0]:.2e}")
-
-
-if USE_WANDB:
-    wandb.finish()
+    # Start training
+    train_athena(config)
