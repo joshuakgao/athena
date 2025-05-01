@@ -1,10 +1,8 @@
 import os
 import sys
 
-import torch
 import torch.nn as nn
 import torch.nn.functional as F
-from embeddings import INPUT_CHANNELS, K
 
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../")))
 from utils.device_selector import device_selector
@@ -29,10 +27,10 @@ class ResidualBlock(nn.Module):
 class Athena(nn.Module):
     def __init__(
         self,
-        input_channels=INPUT_CHANNELS,
+        input_channels=19,
         width=256,
         num_res_blocks=19,
-        output_bins=K,
+        output_bins=64,
         device="auto",
     ):
         super(Athena, self).__init__()

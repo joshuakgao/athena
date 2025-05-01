@@ -1,20 +1,109 @@
+import os
+
+import chess
+import pandas as pd
 import torch
 import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
-import numpy as np
 from tqdm import tqdm
+
 import wandb
-import os
-from datetime import datetime
-from datasets.chessbench.dataset import ChessbenchDataset
 from architecture import Athena
-from embeddings import encode_action_value, encode_win_prob, decode_win_prob
+from datasets.chessbench.dataset import ChessbenchDataset
+from embeddings import decode_win_prob, encode_action_value, encode_win_prob
+
+
+def solve_puzzles(model, puzzle_file, device):
+    """
+    Evaluate tactical-puzzle accuracy.
+
+    • The CSV’s FEN is the position *before* the opponent’s first move.
+    • If the model delivers checkmate in one at any point, the puzzle is
+      counted as solved, even when the mating move differs from the
+      reference solution.
+    • Otherwise the whole reference sequence must be reproduced.
+    """
+    was_training = model.training
+    model.eval()
+
+    puzzles = pd.read_csv(puzzle_file)
+    correct, total = 0, 0
+
+    with torch.no_grad():
+        for _, puzzle in puzzles.iterrows():
+            board = chess.Board(puzzle["FEN"])
+            target = puzzle["Moves"].split()
+
+            predicted_moves = []
+            sequence_ok = True
+            solved_by_mate = False
+
+            for ply, ref_uci in enumerate(target):
+                if ply % 2 == 0:  # opponent’s forced move
+                    try:
+                        board.push(chess.Move.from_uci(ref_uci))
+                        predicted_moves.append(ref_uci)
+                    except ValueError:
+                        sequence_ok = False
+                        break
+                else:  # our turn
+                    best_move, best_score = None, -float("inf")
+
+                    for move in board.legal_moves:
+                        feat = (
+                            torch.from_numpy(
+                                encode_action_value(
+                                    board.fen(),
+                                    move.uci(),
+                                    input_channels=config["input_channels"],
+                                )
+                            )
+                            .permute(2, 0, 1)
+                            .float()
+                            .unsqueeze(0)
+                            .to(device)
+                        )
+                        score = decode_win_prob(model(feat).cpu(), K=K).item()
+                        if score > best_score:
+                            best_score, best_move = score, move
+
+                    if best_move is None:
+                        sequence_ok = False
+                        break
+
+                    board.push(best_move)
+                    predicted_moves.append(best_move.uci())
+
+                    if board.is_checkmate():
+                        solved_by_mate = True
+                        break
+
+                    # otherwise still require exact match
+                    if best_move.uci() != ref_uci:
+                        sequence_ok = False
+                        break
+
+            if solved_by_mate or (sequence_ok and predicted_moves == target):
+                correct += 1
+            total += 1
+
+    if was_training:
+        model.train()
+
+    accuracy = correct / total if total else 0.0
+    print(f"Puzzle solving accuracy: {accuracy:.2%} ({correct}/{total})")
+    return accuracy
 
 
 def train_athena(config):
     # Define model
-    model = Athena(num_res_blocks=config["num_res_blocks"], width=config["width"])
+    model = Athena(
+        input_channels=config["input_channels"],
+        num_res_blocks=config["num_res_blocks"],
+        width=config["width"],
+        output_bins=config["K"],
+    )
     model.to(model.device)
 
     # Initialize WandB
@@ -52,9 +141,8 @@ def train_athena(config):
         optimizer, step_size=1, gamma=config["lr_decay_rate"]
     )
 
-    # Calculate validation frequency (10 times per epoch)
-    val_frequency = max(1, len(train_loader) // 10)
-    train_log_frequency = max(1, len(train_loader) // 100)
+    val_frequency = 10_000_000  # dataset samples
+    train_log_frequency = 1_000_000  # dataset samples
 
     # Training loop
     best_val_loss = float("inf")
@@ -64,14 +152,16 @@ def train_athena(config):
         train_loss = 0.0
         correct = 0
         total = 0
+        sample_counter = 0
 
         # Training phase with periodic validation
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['epochs']}")
         for batch_idx, (fens, moves, win_probs) in enumerate(pbar):
-
             # Skip batches with None win probabilities (if any)
             if win_probs[0] is None:
                 continue
+
+            sample_counter += config["batch_size"]
 
             # Convert FEN to input tensor
             inputs = []
@@ -79,14 +169,16 @@ def train_athena(config):
             for fen, move, win_prob in zip(fens, moves, win_probs):
                 # Encode FEN
                 fen_tensor = (
-                    torch.from_numpy(encode_action_value(fen, move))
+                    torch.from_numpy(
+                        encode_action_value(fen, move, input_channels=INPUT_CHANNELS)
+                    )
                     .permute(2, 0, 1)
                     .float()
                 )
                 inputs.append(fen_tensor)
 
                 # Encode win probability
-                target = torch.from_numpy(encode_win_prob(win_prob)).float()
+                target = torch.from_numpy(encode_win_prob(win_prob, K=K)).float()
                 targets.append(target)
 
             inputs = torch.stack(inputs).to(model.device)
@@ -122,7 +214,7 @@ def train_athena(config):
                 # Log training metrics to WandB
                 wandb.log(
                     {
-                        "epoch": epoch + (batch_idx + 1) / len(train_loader),
+                        "epoch": epoch,
                         "train_loss": avg_loss,
                         "train_accuracy": accuracy,
                         "lr": scheduler.get_last_lr()[0],
@@ -130,9 +222,7 @@ def train_athena(config):
                 )
 
             # Perform validation at regular intervals
-            if (batch_idx + 1) % val_frequency == 0 or (batch_idx + 1) == len(
-                train_loader
-            ):
+            if (batch_idx + 1) % val_frequency == 0:
                 model.eval()
                 val_loss = 0.0
                 val_correct = 0
@@ -153,22 +243,25 @@ def train_athena(config):
                             val_fens, val_moves, val_win_probs
                         ):
                             fen_tensor = (
-                                torch.from_numpy(encode_action_value(fen, move))
+                                torch.from_numpy(
+                                    encode_action_value(
+                                        fen, move, input_channels=INPUT_CHANNELS
+                                    )
+                                )
                                 .permute(2, 0, 1)
                                 .float()
                             )
                             val_inputs.append(fen_tensor)
 
-                            target = torch.from_numpy(encode_win_prob(win_prob)).float()
+                            target = torch.from_numpy(
+                                encode_win_prob(win_prob, K=K)
+                            ).float()
                             val_targets.append(target)
 
                         val_inputs = torch.stack(val_inputs).to(model.device)
                         val_targets = torch.stack(val_targets).to(model.device)
 
                         val_outputs = model(val_inputs)
-
-                        print("Outputs:", val_outputs[:5])
-                        print("Targets:", val_targets[:5])
 
                         loss = criterion(val_outputs, val_targets)
 
@@ -181,24 +274,26 @@ def train_athena(config):
                 avg_val_loss = val_loss / (val_batch_idx + 1)
                 val_accuracy = val_correct / val_total
 
+                # Solve puzzles and calculate accuracy
+                puzzle_accuracy = solve_puzzles(
+                    model, "datasets/chessbench/data/puzzles-200.csv", model.device
+                )
+
                 # Log metrics to WandB
                 if config["use_wandb"]:
                     wandb.log(
                         {
-                            "epoch": epoch,
-                            "train_loss": avg_loss,
-                            "train_accuracy": accuracy,
                             "val_loss": avg_val_loss,
                             "val_accuracy": val_accuracy,
-                            "learning_rate": scheduler.get_last_lr()[0],
+                            "puzzle_accuracy": puzzle_accuracy,
                         }
                     )
 
                 # Save best model
                 if avg_val_loss < best_val_loss:
                     best_val_loss = avg_val_loss
-                    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    model_path = f"athena_best_{timestamp}.pth"
+                    os.makedirs("checkpoints", exist_ok=True)
+                    model_path = f"checkpoints/{config['model_name']}.pth"
                     torch.save(model.state_dict(), model_path)
                     if config["use_wandb"]:
                         wandb.save(model_path)
@@ -228,7 +323,12 @@ if __name__ == "__main__":
         "num_res_blocks": 19,
         "width": 256,
         "num_workers": 4,
+        "K": 64,  # num bins for win probability histogram
+        "input_channels": 19,  # Number of input channels (planes)
     }
+
+    K = config["K"]
+    INPUT_CHANNELS = config["input_channels"]
 
     # Start training
     train_athena(config)

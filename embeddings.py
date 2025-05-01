@@ -1,11 +1,8 @@
 import numpy as np
 import chess
 
-INPUT_CHANNELS = 19
-K = 10
 
-
-def encode_action_value(fen, move_uci):
+def encode_action_value(fen, move_uci, input_channels=19):
     """
     Convert a FEN string into an AlphaZero-style input tensor.
 
@@ -31,7 +28,7 @@ def encode_action_value(fen, move_uci):
     # Planes 13-16: Castling rights (KQkq)
     # Plane 17: 50-move counter (normalized)
     # Plane 18: En passant square (if any)
-    board_tensor = np.zeros((8, 8, INPUT_CHANNELS), dtype=np.float32)
+    board_tensor = np.zeros((8, 8, input_channels), dtype=np.float32)
 
     # Split the FEN into its components
     parts = fen.split()
@@ -97,7 +94,7 @@ def encode_action_value(fen, move_uci):
     return board_tensor
 
 
-def encode_win_prob(win_prob, k=K):
+def encode_win_prob(win_prob, K=64):
     """
     Convert a win probability into a tensor.
 
@@ -109,13 +106,13 @@ def encode_win_prob(win_prob, k=K):
         np.ndarray: A tensor representing the win probability.
     """
     # Normalize the win probability to [0, k-1]
-    bin_index = int(win_prob * (k - 1))
-    tensor = np.zeros((k,), dtype=np.float32)
+    bin_index = int(win_prob * (K - 1))
+    tensor = np.zeros((K,), dtype=np.float32)
     tensor[bin_index] = 1.0
     return tensor
 
 
-def decode_win_prob(tensor):
+def decode_win_prob(tensor, K=64):
     """
     Decode a tensor back into a win probability.
 
