@@ -200,7 +200,7 @@ def train_athena(config):
                 }
             )
 
-            if config["use_wandb"] and (batch_idx + 1) % train_log_frequency == 0:
+            if config["use_wandb"] and batch_idx % train_log_frequency == 0:
                 # Log training metrics to WandB
                 wandb.log(
                     {
@@ -212,7 +212,7 @@ def train_athena(config):
                 )
 
             # Perform validation at regular intervals
-            if (batch_idx + 1) % val_frequency == 0:
+            if batch_idx % val_frequency == 0:
                 model.eval()
                 val_loss = 0.0
                 val_correct = 0
