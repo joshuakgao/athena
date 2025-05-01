@@ -276,7 +276,7 @@ def train_athena(config):
 
                 # Solve puzzles and calculate accuracy
                 puzzle_accuracy = solve_puzzles(
-                    model, "datasets/chessbench/data/puzzles-200.csv", model.device
+                    model, "datasets/chessbench/data/puzzles-1k.csv", model.device
                 )
 
                 # Log metrics to WandB
