@@ -12,6 +12,7 @@ import wandb
 from architecture import Athena
 from datasets.chessbench.dataset import ChessbenchDataset
 from embeddings import decode_win_prob, encode_action_value, encode_win_prob
+from utils.logger import logger
 
 
 def solve_puzzles(model, puzzle_file, device):
@@ -92,7 +93,7 @@ def solve_puzzles(model, puzzle_file, device):
         model.train()
 
     accuracy = correct / total if total else 0.0
-    print(f"Puzzle solving accuracy: {accuracy:.2%} ({correct}/{total})")
+    logger.info(f"Puzzle solving accuracy: {accuracy:.2%} ({correct}/{total})")
     return accuracy
 
 
@@ -116,20 +117,8 @@ def train_athena(config):
     val_dataset = ChessbenchDataset("datasets/chessbench/data", mode="test")
 
     # Create data loaders
-    train_loader = DataLoader(
-        train_dataset,
-        batch_size=config["batch_size"],
-        shuffle=True,
-        num_workers=config["num_workers"],
-        pin_memory=True,
-    )
-    val_loader = DataLoader(
-        val_dataset,
-        batch_size=config["batch_size"] * 2,  # Larger batch for validation
-        shuffle=False,
-        num_workers=config["num_workers"],
-        pin_memory=True,
-    )
+    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"])
+    val_loader = DataLoader(val_dataset, batch_size=config["batch_size"])
 
     # Loss and optimizer
     criterion = nn.CrossEntropyLoss()
@@ -141,18 +130,17 @@ def train_athena(config):
         optimizer, step_size=1, gamma=config["lr_decay_rate"]
     )
 
-    val_frequency = 10_000_000  # dataset samples
-    train_log_frequency = 1_000_000  # dataset samples
+    val_frequency = 2441  # batches
+    train_log_frequency = 10  # batches
 
     # Training loop
-    best_val_loss = float("inf")
+    best_val_accuracy = float("-inf")
 
     for epoch in range(config["epochs"]):
         model.train()
         train_loss = 0.0
         correct = 0
         total = 0
-        sample_counter = 0
 
         # Training phase with periodic validation
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['epochs']}")
@@ -160,8 +148,6 @@ def train_athena(config):
             # Skip batches with None win probabilities (if any)
             if win_probs[0] is None:
                 continue
-
-            sample_counter += config["batch_size"]
 
             # Convert FEN to input tensor
             inputs = []
@@ -207,7 +193,11 @@ def train_athena(config):
             accuracy = correct / total
 
             pbar.set_postfix(
-                {"loss": avg_loss, "acc": accuracy, "lr": scheduler.get_last_lr()[0]}
+                {
+                    "loss": avg_loss,
+                    "acc": accuracy,
+                    "lr": scheduler.get_last_lr()[0],
+                }
             )
 
             if config["use_wandb"] and (batch_idx + 1) % train_log_frequency == 0:
@@ -276,7 +266,7 @@ def train_athena(config):
 
                 # Solve puzzles and calculate accuracy
                 puzzle_accuracy = solve_puzzles(
-                    model, "datasets/chessbench/data/puzzles-1k.csv", model.device
+                    model, "datasets/chessbench/data/puzzles-500.csv", model.device
                 )
 
                 # Log metrics to WandB
@@ -290,14 +280,16 @@ def train_athena(config):
                     )
 
                 # Save best model
-                if avg_val_loss < best_val_loss:
-                    best_val_loss = avg_val_loss
+                if val_accuracy > best_val_accuracy:
+                    best_val_accuracy = val_accuracy
                     os.makedirs("checkpoints", exist_ok=True)
                     model_path = f"checkpoints/{config['model_name']}.pth"
                     torch.save(model.state_dict(), model_path)
                     if config["use_wandb"]:
                         wandb.save(model_path)
-                    print(f"New best model saved with val_loss: {best_val_loss:.4f}")
+                    logger.info(
+                        f"New best model saved with val_accuracy: {val_accuracy:.4f}"
+                    )
 
                 model.train()
         scheduler.step()
@@ -322,7 +314,6 @@ if __name__ == "__main__":
         "use_wandb": True,
         "num_res_blocks": 19,
         "width": 256,
-        "num_workers": 4,
         "K": 64,  # num bins for win probability histogram
         "input_channels": 19,  # Number of input channels (planes)
     }

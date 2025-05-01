@@ -18,6 +18,6 @@
 # /project/hoskere/jkgao/.conda/envs/athena/bin/python train.py
 
 # FOR SAIL:
-cd ~/athena
 free -h
+df -h
 ~/.conda/envs/athena/bin/python train.py
