@@ -308,8 +308,8 @@ def train_athena(config):
 if __name__ == "__main__":
     # Configuration
     config = {
-        "model_name": "2.02_Athena_Resnet19_K=64_lr=0.00006",
-        "description": "Resnet19, FX input encoding",
+        "model_name": "2.01_Athena_Resnet19_K=64_lr=0.00006",
+        "description": "Baseline model with ResNet-19 architecture on vanilla encoding.",
         "epochs": 100,
         "lr": 0.00006,
         "lr_decay_rate": 0.99,
@@ -318,7 +318,7 @@ if __name__ == "__main__":
         "num_blocks": 19,
         "width": 256,
         "K": 64,  # num bins for win probability histogram
-        "input_channels": 26,  # Number of input channels (planes)
+        "input_channels": 19,  # Number of input channels (planes)
     }
 
     K = config["K"]
