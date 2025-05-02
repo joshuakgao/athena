@@ -32,11 +32,11 @@ def solve_puzzles(model, puzzle_file, device):
     correct, total = 0, 0
 
     with torch.no_grad():
-        for _, puzzle in enumerate(
-            tqdm(puzzles.iterrows()), desc="Solving puzzles", total=len(puzzles)
+        for _, row in tqdm(
+            puzzles.iterrows(), desc="Solving puzzles", total=len(puzzles)
         ):
-            board = chess.Board(puzzle["FEN"])
-            target = puzzle["Moves"].split()
+            board = chess.Board(row["FEN"])
+            target = row["Moves"].split()
 
             predicted_moves = []
             sequence_ok = True
