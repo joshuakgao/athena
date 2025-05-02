@@ -32,7 +32,9 @@ def solve_puzzles(model, puzzle_file, device):
     correct, total = 0, 0
 
     with torch.no_grad():
-        for _, puzzle in puzzles.iterrows():
+        for _, puzzle in enumerate(
+            tqdm(puzzles.iterrows()), desc="Solving puzzles", total=len(puzzles)
+        ):
             board = chess.Board(puzzle["FEN"])
             target = puzzle["Moves"].split()
 
@@ -101,11 +103,12 @@ def train_athena(config):
     # Define model
     model = Athena(
         input_channels=config["input_channels"],
-        num_res_blocks=config["num_res_blocks"],
+        num_blocks=config["num_blocks"],
         width=config["width"],
-        output_bins=config["K"],
+        K=config["K"],
     )
     model.to(model.device)
+    logger.info(f"Model parameters: {model.count_parameters() / 1e6:.2f}M")
 
     # Initialize WandB
     if config["use_wandb"]:
@@ -130,8 +133,8 @@ def train_athena(config):
         optimizer, step_size=1, gamma=config["lr_decay_rate"]
     )
 
-    val_frequency = 2441  # batches
-    train_log_frequency = 10  # batches
+    val_frequency = max(1, 10_000_000 // config["batch_size"])
+    train_log_frequency = max(1, 10_000 // config["batch_size"])
 
     # Training loop
     best_val_accuracy = float("-inf")
@@ -223,7 +226,7 @@ def train_athena(config):
                         val_fens,
                         val_moves,
                         val_win_probs,
-                    ) in enumerate(val_loader):
+                    ) in tqdm(enumerate(val_loader), total=len(val_loader)):
                         if val_win_probs[0] is None:
                             continue
 
@@ -266,7 +269,7 @@ def train_athena(config):
 
                 # Solve puzzles and calculate accuracy
                 puzzle_accuracy = solve_puzzles(
-                    model, "datasets/chessbench/data/puzzles-500.csv", model.device
+                    model, "datasets/chessbench/data/puzzles-1k.csv", model.device
                 )
 
                 # Log metrics to WandB
@@ -283,7 +286,7 @@ def train_athena(config):
                 if val_accuracy > best_val_accuracy:
                     best_val_accuracy = val_accuracy
                     os.makedirs("checkpoints", exist_ok=True)
-                    model_path = f"checkpoints/{config['model_name']}.pth"
+                    model_path = f"checkpoints/{config['model_name']}.pt"
                     torch.save(model.state_dict(), model_path)
                     if config["use_wandb"]:
                         wandb.save(model_path)
@@ -305,14 +308,14 @@ def train_athena(config):
 if __name__ == "__main__":
     # Configuration
     config = {
-        "model_name": "2.0_Athena",
-        "description": "Use chessbench dataset",
+        "model_name": "2.1_Athena",
+        "description": "Change to EfficientNetV2 architecture",
         "epochs": 100,
         "lr": 0.00006,
         "lr_decay_rate": 0.99,
-        "batch_size": 4096,
+        "batch_size": 256,
         "use_wandb": True,
-        "num_res_blocks": 19,
+        "num_blocks": 16,
         "width": 256,
         "K": 64,  # num bins for win probability histogram
         "input_channels": 19,  # Number of input channels (planes)
