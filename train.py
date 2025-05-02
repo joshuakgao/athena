@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import wandb
-from architecture import Athena_EfficientNet
+from architecture import Athena_EfficientNet, Athena
 from datasets.chessbench.dataset import ChessbenchDataset
 from embeddings import decode_win_prob, encode_action_value, encode_win_prob
 from utils.logger import logger
@@ -101,7 +101,7 @@ def solve_puzzles(model, puzzle_file, device):
 
 def train_athena(config):
     # Define model
-    model = Athena_EfficientNet(
+    model = Athena(
         input_channels=config["input_channels"],
         num_blocks=config["num_blocks"],
         width=config["width"],
@@ -133,8 +133,8 @@ def train_athena(config):
         optimizer, step_size=1, gamma=config["lr_decay_rate"]
     )
 
-    val_frequency = max(1, 10_000_000 // config["batch_size"])
-    train_log_frequency = max(1, 10_000 // config["batch_size"])
+    val_frequency = max(1, 1_000_000 // config["batch_size"])
+    train_log_frequency = 1
 
     # Training loop
     best_val_accuracy = float("-inf")
@@ -308,17 +308,17 @@ def train_athena(config):
 if __name__ == "__main__":
     # Configuration
     config = {
-        "model_name": "2.1_Athena_K=64_lr=0.0006",
-        "description": "Change to EfficientNetV2 architecture",
+        "model_name": "2.02_Athena_Resnet19_K=64_lr=0.00006",
+        "description": "Resnet19, FX input encoding",
         "epochs": 100,
-        "lr": 0.0006,
+        "lr": 0.00006,
         "lr_decay_rate": 0.99,
         "batch_size": 256,
         "use_wandb": True,
-        "num_blocks": 16,
+        "num_blocks": 19,
         "width": 256,
         "K": 64,  # num bins for win probability histogram
-        "input_channels": 19,  # Number of input channels (planes)
+        "input_channels": 26,  # Number of input channels (planes)
     }
 
     K = config["K"]

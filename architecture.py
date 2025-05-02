@@ -30,12 +30,12 @@ class Athena(nn.Module):
         input_channels=19,
         width=256,
         num_blocks=19,
-        output_bins=64,
+        K=64,
         device="auto",
     ):
         super(Athena, self).__init__()
         self.device = device_selector(device, label="Athena")
-        self.output_bins = output_bins
+        self.output_bins = K
 
         # Initial convolutional layer
         self.conv1 = nn.Conv2d(input_channels, width, kernel_size=3, padding=1)
@@ -50,7 +50,7 @@ class Athena(nn.Module):
         self.value_conv1 = nn.Conv2d(width, 32, kernel_size=1)
         self.value_bn1 = nn.BatchNorm2d(32)
         self.value_fc1 = nn.Linear(32 * 8 * 8, 512)
-        self.value_fc2 = nn.Linear(512, output_bins)
+        self.value_fc2 = nn.Linear(512, self.output_bins)
 
     def forward(self, x):
         x = x.to(self.device)
@@ -67,6 +67,10 @@ class Athena(nn.Module):
         # value_probs = F.softmax(value_logits, dim=1)  # [batch, output_bins]
 
         return value_logits
+
+    def count_parameters(self):
+        """Returns the number of parameters in the model"""
+        return sum(p.numel() for p in self.parameters() if p.requires_grad)
 
 
 class MBConvBlock(nn.Module):
