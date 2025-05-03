@@ -1,11 +1,7 @@
 chess
-stockfish
 numpy
 torch
-psutil
 tqdm
 wandb
 pandas
-pyarrow
-gdown
 apache-beam
