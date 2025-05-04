@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import wandb
-from architecture import Athena_EfficientNet, Athena
+from architecture import AthenaViT
 from datasets.chessbench.dataset import ChessbenchDataset
 from embeddings import decode_win_prob, encode_action_value, encode_win_prob
 from utils.logger import logger
@@ -101,11 +101,12 @@ def solve_puzzles(model, puzzle_file, device):
 
 def train_athena(config):
     # Define model
-    model = Athena(
+    model = AthenaViT(
         input_channels=config["input_channels"],
-        num_blocks=config["num_blocks"],
-        width=config["width"],
-        K=config["K"],
+        output_bins=config["K"],
+        embed_dim=config["embed_dim"],
+        depth=config["depth"],
+        n_heads=config["n_heads"],
     )
     model.to(model.device)
     logger.info(f"Model parameters: {model.count_parameters() / 1e6:.2f}M")
@@ -308,17 +309,18 @@ def train_athena(config):
 if __name__ == "__main__":
     # Configuration
     config = {
-        "model_name": "2.03_Athena_Resnet19_K=128_lr=0.00006",
-        "description": "Added attack map to input encoding.",
-        "epochs": 100,
+        "model_name": "2.04_Athena_ViT-G_K=128_lr=0.00006",
+        "description": "Train on vision transformer.",
+        "epochs": 3,
         "lr": 0.00006,
         "lr_decay_rate": 0.99,
-        "batch_size": 256,
+        "batch_size": 128,
         "use_wandb": True,
-        "num_blocks": 19,
-        "width": 256,
         "K": 128,  # num bins for win probability histogram
         "input_channels": 28,  # Number of input channels (planes)
+        "embed_dim": 1024,  # Embedding dimension
+        "depth": 24,  # Number of transformer blocks
+        "n_heads": 16,  # Number of attention heads
     }
 
     K = config["K"]
