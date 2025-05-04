@@ -135,7 +135,7 @@ def train_athena(config):
     )
 
     val_frequency = max(1, 5_000_000 // config["batch_size"])
-    train_log_frequency = 1
+    train_log_frequency = max(1, 256 // config["batch_size"])
 
     # Training loop
     best_val_accuracy = float("-inf")
