@@ -133,7 +133,7 @@ def train_athena(config):
         optimizer, step_size=1, gamma=config["lr_decay_rate"]
     )
 
-    val_frequency = max(1, 1_000_000 // config["batch_size"])
+    val_frequency = max(1, 5_000_000 // config["batch_size"])
     train_log_frequency = 1
 
     # Training loop
@@ -308,8 +308,8 @@ def train_athena(config):
 if __name__ == "__main__":
     # Configuration
     config = {
-        "model_name": "2.01_Athena_Resnet19_K=64_lr=0.00006",
-        "description": "Baseline model with ResNet-19 architecture on vanilla encoding.",
+        "model_name": "2.03_Athena_Resnet19_K=128_lr=0.00006",
+        "description": "Added attack map to input encoding.",
         "epochs": 100,
         "lr": 0.00006,
         "lr_decay_rate": 0.99,
@@ -317,12 +317,13 @@ if __name__ == "__main__":
         "use_wandb": True,
         "num_blocks": 19,
         "width": 256,
-        "K": 64,  # num bins for win probability histogram
-        "input_channels": 19,  # Number of input channels (planes)
+        "K": 128,  # num bins for win probability histogram
+        "input_channels": 28,  # Number of input channels (planes)
     }
 
     K = config["K"]
     INPUT_CHANNELS = config["input_channels"]
 
+    logger.info(config)
     # Start training
     train_athena(config)
