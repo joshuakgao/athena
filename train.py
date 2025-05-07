@@ -140,7 +140,7 @@ def train_athena(config):
     train_log_frequency = max(1, 4_096 // config["batch_size"])
 
     # Training loop
-    best_val_accuracy = float("-inf")
+    best_puzzle_accuracy = float("-inf")
 
     for epoch in range(config["epochs"]):
         model.train()
@@ -289,15 +289,15 @@ def train_athena(config):
                     )
 
                 # Save best model
-                if val_accuracy > best_val_accuracy:
-                    best_val_accuracy = val_accuracy
+                if puzzle_accuracy > best_puzzle_accuracy:
+                    best_puzzle_accuracy = puzzle_accuracy
                     os.makedirs("checkpoints", exist_ok=True)
                     model_path = f"checkpoints/{config['model_name']}.pt"
                     torch.save(model.state_dict(), model_path)
                     if config["use_wandb"]:
                         wandb.save(model_path)
                     logger.info(
-                        f"New best model saved with val_accuracy: {val_accuracy:.4f}"
+                        f"New best model saved with puzzle_accuracy: {puzzle_accuracy:.4f}"
                     )
 
                 model.train()
