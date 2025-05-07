@@ -35,6 +35,7 @@ def solve_puzzles(model, puzzle_file, device):
         for _, row in tqdm(
             puzzles.iterrows(), desc="Solving puzzles", total=len(puzzles)
         ):
+            logger.info(row["FEN"])
             board = chess.Board(row["FEN"])
             target = row["Moves"].split()
 
@@ -87,6 +88,8 @@ def solve_puzzles(model, puzzle_file, device):
                         sequence_ok = False
                         break
 
+            logger.info(f"Predicted moves: {predicted_moves}")
+            logger.info(f"Target moves: {target}")
             if solved_by_mate or (sequence_ok and predicted_moves == target):
                 correct += 1
             total += 1
@@ -133,8 +136,8 @@ def train_athena(config):
         optimizer, step_size=1, gamma=config["lr_decay_rate"]
     )
 
-    val_frequency = max(1, 5_000_000 // config["batch_size"])
-    train_log_frequency = 1
+    val_frequency = max(1, 4_194_304 // config["batch_size"])
+    train_log_frequency = max(1, 4_096 // config["batch_size"])
 
     # Training loop
     best_val_accuracy = float("-inf")
@@ -227,6 +230,9 @@ def train_athena(config):
                         val_moves,
                         val_win_probs,
                     ) in tqdm(enumerate(val_loader), total=len(val_loader)):
+                        if val_batch_idx > 100:
+                            break
+
                         if val_win_probs[0] is None:
                             continue
 
@@ -308,12 +314,12 @@ def train_athena(config):
 if __name__ == "__main__":
     # Configuration
     config = {
-        "model_name": "2.03_Athena_Resnet19_K=128_lr=0.00006",
+        "model_name": "2.03_Athena_Resnet19_K=128_lr=0.0001",
         "description": "Added attack map to input encoding.",
-        "epochs": 100,
-        "lr": 0.00006,
-        "lr_decay_rate": 0.99,
-        "batch_size": 256,
+        "epochs": 3,
+        "lr": 0.0001,
+        "lr_decay_rate": 1,
+        "batch_size": 128,
         "use_wandb": True,
         "num_blocks": 19,
         "width": 256,
