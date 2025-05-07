@@ -1,5 +1,4 @@
 import os
-
 import chess
 import pandas as pd
 import torch
@@ -7,24 +6,14 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader
 from tqdm import tqdm
-
 import wandb
-from architecture import AthenaViT
+from architecture import ChessBenchTransformer, ChessBenchTokenizer, loss_fn
 from datasets.chessbench.dataset import ChessbenchDataset
-from embeddings import decode_win_prob, encode_action_value, encode_win_prob
 from utils.logger import logger
 
 
-def solve_puzzles(model, puzzle_file, device):
-    """
-    Evaluate tactical-puzzle accuracy.
-
-    • The CSV’s FEN is the position *before* the opponent’s first move.
-    • If the model delivers checkmate in one at any point, the puzzle is
-      counted as solved, even when the mating move differs from the
-      reference solution.
-    • Otherwise the whole reference sequence must be reproduced.
-    """
+def solve_puzzles(model, tokenizer, puzzle_file, device):
+    """Evaluate tactical-puzzle accuracy with the new tokenizer-based model."""
     was_training = model.training
     model.eval()
 
@@ -35,6 +24,7 @@ def solve_puzzles(model, puzzle_file, device):
         for _, row in tqdm(
             puzzles.iterrows(), desc="Solving puzzles", total=len(puzzles)
         ):
+            logger.info(row["FEN"])
             board = chess.Board(row["FEN"])
             target = row["Moves"].split()
 
@@ -43,7 +33,7 @@ def solve_puzzles(model, puzzle_file, device):
             solved_by_mate = False
 
             for ply, ref_uci in enumerate(target):
-                if ply % 2 == 0:  # opponent’s forced move
+                if ply % 2 == 0:  # opponent's forced move
                     try:
                         board.push(chess.Move.from_uci(ref_uci))
                         predicted_moves.append(ref_uci)
@@ -54,20 +44,20 @@ def solve_puzzles(model, puzzle_file, device):
                     best_move, best_score = None, -float("inf")
 
                     for move in board.legal_moves:
-                        feat = (
-                            torch.from_numpy(
-                                encode_action_value(
-                                    board.fen(),
-                                    move.uci(),
-                                    input_channels=config["input_channels"],
-                                )
-                            )
-                            .permute(2, 0, 1)
-                            .float()
-                            .unsqueeze(0)
-                            .to(device)
-                        )
-                        score = decode_win_prob(model(feat).cpu(), K=K).item()
+                        # Encode with new tokenizer
+                        fen_ids = torch.tensor(
+                            [tokenizer.encode_fen(board.fen())], dtype=torch.long
+                        ).to(device)
+                        action_id = torch.tensor(
+                            [tokenizer.encode_action(move.uci())], dtype=torch.long
+                        ).to(device)
+
+                        # Get prediction
+                        logits = model(fen_ids, action_id)
+                        score = logits.argmax(dim=-1).float() / (
+                            model.n_bins - 1
+                        )  # Convert bin to [0,1]
+
                         if score > best_score:
                             best_score, best_move = score, move
 
@@ -82,11 +72,12 @@ def solve_puzzles(model, puzzle_file, device):
                         solved_by_mate = True
                         break
 
-                    # otherwise still require exact match
                     if best_move.uci() != ref_uci:
                         sequence_ok = False
                         break
 
+            logger.info(f"Predicted moves: {predicted_moves}")
+            logger.info(f"Target moves: {target}")
             if solved_by_mate or (sequence_ok and predicted_moves == target):
                 correct += 1
             total += 1
@@ -99,24 +90,26 @@ def solve_puzzles(model, puzzle_file, device):
     return accuracy
 
 
-def train_athena(config):
-    # Define model
-    model = AthenaViT(
-        input_channels=config["input_channels"],
-        output_bins=config["K"],
-        embed_dim=config["embed_dim"],
-        depth=config["depth"],
-        n_heads=config["n_heads"],
+def train_chessbench(config):
+    # Initialize tokenizer and model
+    tokenizer = ChessBenchTokenizer()
+    model = ChessBenchTransformer(
+        dim=config["dim"],
+        heads=config["n_heads"],
+        layers=config["depth"],
+        n_bins=config["K"],
     )
     model.to(model.device)
-    logger.info(f"Model parameters: {model.count_parameters() / 1e6:.2f}M")
+    logger.info(
+        f"Model parameters: {sum(p.numel() for p in model.parameters()) / 1e6:.2f}M"
+    )
 
     # Initialize WandB
     if config["use_wandb"]:
         wandb.init(project="athena_chess", config=config, name=config["model_name"])
         wandb.watch(model)
 
-    # Create datasets
+    # Create datasets (you'll need to adapt your ChessbenchDataset to work with the new tokenizer)
     train_dataset = ChessbenchDataset("datasets/chessbench/data", mode="train")
     val_dataset = ChessbenchDataset("datasets/chessbench/data", mode="test")
 
@@ -125,7 +118,6 @@ def train_athena(config):
     val_loader = DataLoader(val_dataset, batch_size=config["batch_size"])
 
     # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
     optimizer = optim.AdamW(
         model.parameters(),
         lr=config["lr"],
@@ -134,11 +126,11 @@ def train_athena(config):
         optimizer, step_size=1, gamma=config["lr_decay_rate"]
     )
 
-    val_frequency = max(1, 5_000_000 // config["batch_size"])
-    train_log_frequency = max(1, 256 // config["batch_size"])
+    val_frequency = max(1, 4_194_304 // config["batch_size"])
+    train_log_frequency = max(1, 4_096 // config["batch_size"])
 
     # Training loop
-    best_val_accuracy = float("-inf")
+    best_puzzle_accuracy = float("-inf")
 
     for epoch in range(config["epochs"]):
         model.train()
@@ -146,55 +138,56 @@ def train_athena(config):
         correct = 0
         total = 0
 
-        # Training phase with periodic validation
         pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['epochs']}")
         for batch_idx, (fens, moves, win_probs) in enumerate(pbar):
-            # Skip batches with None win probabilities (if any)
+            # Skip batches with None win probabilities
             if win_probs[0] is None:
                 continue
 
-            # Convert FEN to input tensor
-            inputs = []
+            # Prepare batch
+            fen_ids = []
+            action_ids = []
             targets = []
+
             for fen, move, win_prob in zip(fens, moves, win_probs):
-                # Encode FEN
-                fen_tensor = (
-                    torch.from_numpy(
-                        encode_action_value(fen, move, input_channels=INPUT_CHANNELS)
-                    )
-                    .permute(2, 0, 1)
-                    .float()
-                )
-                inputs.append(fen_tensor)
+                try:
+                    fen_ids.append(tokenizer.encode_fen(fen))
+                    action_ids.append(tokenizer.encode_action(move))
+                    targets.append(win_prob)
+                except (KeyError, ValueError) as e:
+                    continue  # Skip invalid moves
 
-                # Encode win probability
-                target = torch.from_numpy(encode_win_prob(win_prob, K=K)).float()
-                targets.append(target)
+            if not fen_ids:  # Skip empty batches
+                continue
 
-            inputs = torch.stack(inputs).to(model.device)
-            targets = torch.stack(targets).to(model.device)
+            # Convert to tensors
+            fen_tensor = torch.tensor(fen_ids, dtype=torch.long).to(model.device)
+            action_tensor = torch.tensor(action_ids, dtype=torch.long).to(model.device)
+            target_tensor = torch.tensor(targets, dtype=torch.float).to(model.device)
 
             # Forward pass
             optimizer.zero_grad()
-            outputs = model(inputs)
+            logits = model(fen_tensor, action_tensor)
 
             # Calculate loss
-            loss = criterion(outputs, targets)
+            loss = loss_fn(logits, target_tensor, config["K"])
 
             # Backward pass and optimize
             loss.backward()
             optimizer.step()
 
-            # Calculate accuracy
-            preds = outputs.argmax(dim=1)
-            true_labels = targets.argmax(dim=1)
-            correct += (preds == true_labels).sum().item()
-            total += preds.size(0)
+            # Calculate accuracy (approximate - compare bin centers to target)
+            pred_bins = logits.argmax(dim=-1)
+            pred_values = pred_bins.float() / (config["K"] - 1)  # Convert to [0,1]
+            correct += (
+                (pred_values - target_tensor).abs().lt(1 / config["K"]).sum().item()
+            )
+            total += pred_bins.size(0)
 
             # Update statistics
             train_loss += loss.item()
             avg_loss = train_loss / (batch_idx + 1)
-            accuracy = correct / total
+            accuracy = correct / total if total > 0 else 0.0
 
             pbar.set_postfix(
                 {
@@ -205,7 +198,6 @@ def train_athena(config):
             )
 
             if config["use_wandb"] and batch_idx % train_log_frequency == 0:
-                # Log training metrics to WandB
                 wandb.log(
                     {
                         "epoch": epoch,
@@ -215,7 +207,7 @@ def train_athena(config):
                     }
                 )
 
-            # Perform validation at regular intervals
+            # Validation
             if batch_idx % val_frequency == 0:
                 model.eval()
                 val_loss = 0.0
@@ -228,52 +220,68 @@ def train_athena(config):
                         val_moves,
                         val_win_probs,
                     ) in tqdm(enumerate(val_loader), total=len(val_loader)):
+                        if val_batch_idx > 100:
+                            break
+
                         if val_win_probs[0] is None:
                             continue
 
-                        val_inputs = []
+                        # Prepare validation batch
+                        val_fen_ids = []
+                        val_action_ids = []
                         val_targets = []
+
                         for fen, move, win_prob in zip(
                             val_fens, val_moves, val_win_probs
                         ):
-                            fen_tensor = (
-                                torch.from_numpy(
-                                    encode_action_value(
-                                        fen, move, input_channels=INPUT_CHANNELS
-                                    )
-                                )
-                                .permute(2, 0, 1)
-                                .float()
-                            )
-                            val_inputs.append(fen_tensor)
+                            try:
+                                val_fen_ids.append(tokenizer.encode_fen(fen))
+                                val_action_ids.append(tokenizer.encode_action(move))
+                                val_targets.append(win_prob)
+                            except (KeyError, ValueError):
+                                continue
 
-                            target = torch.from_numpy(
-                                encode_win_prob(win_prob, K=K)
-                            ).float()
-                            val_targets.append(target)
+                        # Skip empty validation batches
+                        if not val_fen_ids:
+                            continue
 
-                        val_inputs = torch.stack(val_inputs).to(model.device)
-                        val_targets = torch.stack(val_targets).to(model.device)
+                        val_fen_tensor = torch.tensor(val_fen_ids, dtype=torch.long).to(
+                            model.device
+                        )
+                        val_action_tensor = torch.tensor(
+                            val_action_ids, dtype=torch.long
+                        ).to(model.device)
+                        val_target_tensor = torch.tensor(
+                            val_targets, dtype=torch.float
+                        ).to(model.device)
 
-                        val_outputs = model(val_inputs)
-
-                        loss = criterion(val_outputs, val_targets)
+                        val_logits = model(val_fen_tensor, val_action_tensor)
+                        loss = loss_fn(val_logits, val_target_tensor, config["K"])
 
                         val_loss += loss.item()
-                        preds = val_outputs.argmax(dim=1)
-                        true_labels = val_targets.argmax(dim=1)
-                        val_correct += (preds == true_labels).sum().item()
-                        val_total += preds.size(0)
+                        val_pred_bins = val_logits.argmax(dim=-1)
+                        val_pred_values = val_pred_bins.float() / (config["K"] - 1)
+                        val_correct += (
+                            (val_pred_values - val_target_tensor)
+                            .abs()
+                            .lt(1 / config["K"])
+                            .sum()
+                            .item()
+                        )
+                        val_total += val_pred_bins.size(0)
 
-                avg_val_loss = val_loss / (val_batch_idx + 1)
-                val_accuracy = val_correct / val_total
+                avg_val_loss = (
+                    val_loss / (val_batch_idx + 1) if val_batch_idx > 0 else val_loss
+                )
+                val_accuracy = val_correct / val_total if val_total > 0 else 0.0
 
-                # Solve puzzles and calculate accuracy
                 puzzle_accuracy = solve_puzzles(
-                    model, "datasets/chessbench/data/puzzles-1k.csv", model.device
+                    model,
+                    tokenizer,
+                    "datasets/chessbench/data/puzzles-1k.csv",
+                    model.device,
                 )
 
-                # Log metrics to WandB
                 if config["use_wandb"]:
                     wandb.log(
                         {
@@ -284,48 +292,41 @@ def train_athena(config):
                     )
 
                 # Save best model
-                if val_accuracy > best_val_accuracy:
-                    best_val_accuracy = val_accuracy
+                if puzzle_accuracy > best_puzzle_accuracy:
+                    best_puzzle_accuracy = puzzle_accuracy
                     os.makedirs("checkpoints", exist_ok=True)
                     model_path = f"checkpoints/{config['model_name']}.pt"
                     torch.save(model.state_dict(), model_path)
                     if config["use_wandb"]:
                         wandb.save(model_path)
                     logger.info(
-                        f"New best model saved with val_accuracy: {val_accuracy:.4f}"
+                        f"New best model saved with puzzle_accuracy: {puzzle_accuracy:.4f}"
                     )
 
                 model.train()
+
         scheduler.step()
 
     # Cleanup
-    train_dataset.close()
-    val_dataset.close()
     if config["use_wandb"]:
         wandb.finish()
 
 
-# Example usage:
+# Example configuration
 if __name__ == "__main__":
-    # Configuration
     config = {
-        "model_name": "2.04_Athena_ViT-G_K=128_lr=0.00006",
-        "description": "Train on vision transformer.",
-        "epochs": 3,
-        "lr": 0.00006,
-        "lr_decay_rate": 0.99,
-        "batch_size": 128,
+        "model_name": "2.05_ChessBench-S",
+        "description": "Transformer with tokenized FEN/UCI inputs",
         "use_wandb": True,
-        "K": 128,  # num bins for win probability histogram
-        "input_channels": 28,  # Number of input channels (planes)
-        "embed_dim": 1024,  # Embedding dimension
-        "depth": 24,  # Number of transformer blocks
-        "n_heads": 16,  # Number of attention heads
+        "epochs": 3,
+        "lr": 1e-4,
+        "lr_decay_rate": 1,
+        "batch_size": 128,
+        "K": 128,  # Number of bins for win probability
+        "dim": 256,  # Model dimension
+        "n_heads": 8,  # Number of attention heads
+        "depth": 8,  # Number of transformer layers
     }
 
-    K = config["K"]
-    INPUT_CHANNELS = config["input_channels"]
-
     logger.info(config)
-    # Start training
-    train_athena(config)
+    train_chessbench(config)
