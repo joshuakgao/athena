@@ -41,7 +41,7 @@ def solve_puzzles(model, tokenizer, puzzle_file, device):
                         sequence_ok = False
                         break
                 else:  # our turn
-                    best_move, best_score = None, -float("inf")
+                    best_move, best_bin = None, -float("inf")
 
                     for move in board.legal_moves:
                         # Encode with new tokenizer
@@ -54,12 +54,10 @@ def solve_puzzles(model, tokenizer, puzzle_file, device):
 
                         # Get prediction
                         logits = model(fen_ids, action_id)
-                        score = logits.argmax(dim=-1).float() / (
-                            model.n_bins - 1
-                        )  # Convert bin to [0,1]
+                        bin = logits.argmax(dim=-1)
 
-                        if score > best_score:
-                            best_score, best_move = score, move
+                        if bin > best_bin:
+                            best_bin, best_move = bin, move
 
                     if best_move is None:
                         sequence_ok = False
@@ -178,10 +176,8 @@ def train_chessbench(config):
 
             # Calculate accuracy (approximate - compare bin centers to target)
             pred_bins = logits.argmax(dim=-1)
-            pred_values = pred_bins.float() / (config["K"] - 1)  # Convert to [0,1]
-            correct += (
-                (pred_values - target_tensor).abs().lt(1 / config["K"]).sum().item()
-            )
+            target_bins = (target_tensor * (config["K"] - 1)).long()
+            correct += (pred_bins == target_bins).sum().item()
             total += pred_bins.size(0)
 
             # Update statistics
@@ -260,14 +256,8 @@ def train_chessbench(config):
 
                         val_loss += loss.item()
                         val_pred_bins = val_logits.argmax(dim=-1)
-                        val_pred_values = val_pred_bins.float() / (config["K"] - 1)
-                        val_correct += (
-                            (val_pred_values - val_target_tensor)
-                            .abs()
-                            .lt(1 / config["K"])
-                            .sum()
-                            .item()
-                        )
+                        val_target_bins = (val_target_tensor * (config["K"] - 1)).long()
+                        val_correct += (val_pred_bins == val_target_bins).sum().item()
                         val_total += val_pred_bins.size(0)
 
                 avg_val_loss = (
