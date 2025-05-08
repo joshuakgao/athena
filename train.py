@@ -9,7 +9,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import wandb
-from architecture import Athena_EfficientNet, Athena
+from architecture import Athena
 from datasets.chessbench.dataset import ChessbenchDataset
 from embeddings import decode_win_prob, encode_action_value, encode_win_prob
 from utils.logger import logger
@@ -230,7 +230,7 @@ def train_athena(config):
                         val_moves,
                         val_win_probs,
                     ) in tqdm(enumerate(val_loader), total=len(val_loader)):
-                        if val_batch_idx > 100:
+                        if config["batch_size"] * val_batch_idx > 2**15:
                             break
 
                         if val_win_probs[0] is None:
@@ -314,17 +314,17 @@ def train_athena(config):
 if __name__ == "__main__":
     # Configuration
     config = {
-        "model_name": "2.03_Athena_Resnet19_K=128_lr=0.0001",
-        "description": "Added attack map to input encoding.",
+        "model_name": "2.05_Athena_Resnet19_K=128_lr=0.0001",
+        "description": "Removed FX input encodings. Flipped board for black.",
         "epochs": 3,
         "lr": 0.0001,
         "lr_decay_rate": 1,
-        "batch_size": 128,
+        "batch_size": 4096,
         "use_wandb": True,
         "num_blocks": 19,
         "width": 256,
         "K": 128,  # num bins for win probability histogram
-        "input_channels": 28,  # Number of input channels (planes)
+        "input_channels": 19,  # Number of input channels (planes)
     }
 
     K = config["K"]
