@@ -136,8 +136,8 @@ def train_athena(config):
         optimizer, step_size=1, gamma=config["lr_decay_rate"]
     )
 
-    val_frequency = max(1, 4_194_304 // config["batch_size"])
-    train_log_frequency = max(1, 4_096 // config["batch_size"])
+    val_frequency = max(1, 2**30 // config["batch_size"])
+    train_log_frequency = max(1, 4096 // config["batch_size"])
 
     # Training loop
     best_puzzle_accuracy = float("-inf")
@@ -275,7 +275,7 @@ def train_athena(config):
 
                 # Solve puzzles and calculate accuracy
                 puzzle_accuracy = solve_puzzles(
-                    model, "datasets/chessbench/data/puzzles-1k.csv", model.device
+                    model, "datasets/chessbench/data/puzzles.csv", model.device
                 )
 
                 # Log metrics to WandB
