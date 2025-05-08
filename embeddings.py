@@ -2,7 +2,7 @@ import numpy as np
 import chess
 
 
-def encode_action_value(fen, move_uci, input_channels=21):
+def encode_action_value(fen, move_uci, input_channels=20):
     """
     Convert a FEN and move into an AlphaZero-style input tensor with move encoding.
 
@@ -12,9 +12,9 @@ def encode_action_value(fen, move_uci, input_channels=21):
 
     Returns:
         np.ndarray: A 8x8xN tensor where:
-                   - Planes 0-18: Board state encoding (as before)
-                   - Plane 19: 'From' square of the move (1 where piece moves from)
-                   - Plane 20: 'To' square of the move (1 where piece moves to)
+                   - Planes 0-17: Board state encoding (as before)
+                   - Plane 18: 'From' square of the move (1 where piece moves from)
+                   - Plane 19: 'To' square of the move (1 where piece moves to)
     """
     board = chess.Board(fen)
     color_to_move = board.turn

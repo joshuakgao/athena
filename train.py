@@ -324,7 +324,7 @@ if __name__ == "__main__":
         "num_blocks": 19,
         "width": 256,
         "K": 128,  # num bins for win probability histogram
-        "input_channels": 19,  # Number of input channels (planes)
+        "input_channels": 20,  # Number of input channels (planes)
     }
 
     K = config["K"]
