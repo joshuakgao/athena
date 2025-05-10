@@ -314,8 +314,8 @@ def train_athena(config):
 if __name__ == "__main__":
     # Configuration
     config = {
-        "model_name": "2.06_Athena_Resnet19_K=128_lr=0.0001",
-        "description": "Added FX and alphazero move input encodings. Flipped board for black.",
+        "model_name": "2.07_Athena_Resnet19_K=128_lr=0.0001",
+        "description": "Removed FX input encodings. Flipped board for black. Added planes for promotion piece.",
         "epochs": 3,
         "lr": 0.0001,
         "lr_decay_rate": 1,
@@ -324,7 +324,7 @@ if __name__ == "__main__":
         "num_blocks": 19,
         "width": 256,
         "K": 128,  # num bins for win probability histogram
-        "input_channels": 101,  # Number of input channels (planes)
+        "input_channels": 24,  # Number of input channels (planes)
     }
 
     K = config["K"]
