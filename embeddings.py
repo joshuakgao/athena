@@ -2,100 +2,100 @@ import numpy as np
 import chess
 
 
-def encode_action_value(fen, move_uci, input_channels=20):
-    """
-    Convert a FEN and move into an AlphaZero-style input tensor with move encoding.
+# def encode_action_value(fen, move_uci, input_channels=20):
+#     """
+#     Convert a FEN and move into an AlphaZero-style input tensor with move encoding.
 
-    Args:
-        fen (str): The FEN string representing the chess position.
-        move_uci (str): The UCI string representing the move to be made.
+#     Args:
+#         fen (str): The FEN string representing the chess position.
+#         move_uci (str): The UCI string representing the move to be made.
 
-    Returns:
-        np.ndarray: A 8x8xN tensor where:
-                   - Planes 0-17: Board state encoding (as before)
-                   - Plane 18: 'From' square of the move (1 where piece moves from)
-                   - Plane 19: 'To' square of the move (1 where piece moves to)
-    """
-    board = chess.Board(fen)
-    color_to_move = board.turn
+#     Returns:
+#         np.ndarray: A 8x8xN tensor where:
+#                    - Planes 0-17: Board state encoding (as before)
+#                    - Plane 18: 'From' square of the move (1 where piece moves from)
+#                    - Plane 19: 'To' square of the move (1 where piece moves to)
+#     """
+#     board = chess.Board(fen)
+#     color_to_move = board.turn
 
-    # Initialize tensor with extra planes for move encoding
-    board_tensor = np.zeros((8, 8, input_channels), dtype=np.float32)
+#     # Initialize tensor with extra planes for move encoding
+#     board_tensor = np.zeros((8, 8, input_channels), dtype=np.float32)
 
-    # Split the FEN into its components
-    parts = fen.split()
-    board_part = parts[0]
-    color_part = parts[1]
-    castling_part = parts[2]
-    en_passant_part = parts[3]
-    halfmove_part = int(parts[4])
-    fullmove_part = int(parts[5])
+#     # Split the FEN into its components
+#     parts = fen.split()
+#     board_part = parts[0]
+#     color_part = parts[1]
+#     castling_part = parts[2]
+#     en_passant_part = parts[3]
+#     halfmove_part = int(parts[4])
+#     fullmove_part = int(parts[5])
 
-    # Piece encoding (planes 0-11)
-    piece_to_plane = {
-        "P": 0,
-        "N": 1,
-        "B": 2,
-        "R": 3,
-        "Q": 4,
-        "K": 5,
-        "p": 6,
-        "n": 7,
-        "b": 8,
-        "r": 9,
-        "q": 10,
-        "k": 11,
-    }
+#     # Piece encoding (planes 0-11)
+#     piece_to_plane = {
+#         "P": 0,
+#         "N": 1,
+#         "B": 2,
+#         "R": 3,
+#         "Q": 4,
+#         "K": 5,
+#         "p": 6,
+#         "n": 7,
+#         "b": 8,
+#         "r": 9,
+#         "q": 10,
+#         "k": 11,
+#     }
 
-    # Parse the board
-    row = 0
-    col = 0
-    for c in board_part:
-        if c == "/":
-            row += 1
-            col = 0
-        elif c.isdigit():
-            col += int(c)
-        else:
-            plane = piece_to_plane[c]
-            board_tensor[row, col, plane] = 1
-            col += 1
+#     # Parse the board
+#     row = 0
+#     col = 0
+#     for c in board_part:
+#         if c == "/":
+#             row += 1
+#             col = 0
+#         elif c.isdigit():
+#             col += int(c)
+#         else:
+#             plane = piece_to_plane[c]
+#             board_tensor[row, col, plane] = 1
+#             col += 1
 
-    # Set castling rights (planes 12-15: K, Q, k, q)
-    castling_map = {
-        "w": {"K": 12, "Q": 13, "k": 14, "q": 15},
-        "b": {"k": 12, "q": 13, "K": 14, "Q": 15},
-    }
-    for right, plane in castling_map[color_part].items():
-        if right in castling_part:
-            board_tensor[:, :, plane] = 1
+#     # Set castling rights (planes 12-15: K, Q, k, q)
+#     castling_map = {
+#         "w": {"K": 12, "Q": 13, "k": 14, "q": 15},
+#         "b": {"k": 12, "q": 13, "K": 14, "Q": 15},
+#     }
+#     for right, plane in castling_map[color_part].items():
+#         if right in castling_part:
+#             board_tensor[:, :, plane] = 1
 
-    # 50-move rule (plane 16)
-    board_tensor[:, :, 16] = min(halfmove_part / 50.0, 1.0)
+#     # 50-move rule (plane 16)
+#     board_tensor[:, :, 16] = min(halfmove_part / 50.0, 1.0)
 
-    # En passant (plane 17)
-    if en_passant_part != "-":
-        ep_col = ord(en_passant_part[0]) - ord("a")
-        ep_row = 8 - int(en_passant_part[1])
-        board_tensor[ep_row, ep_col, 17] = 1
+#     # En passant (plane 17)
+#     if en_passant_part != "-":
+#         ep_col = ord(en_passant_part[0]) - ord("a")
+#         ep_row = 8 - int(en_passant_part[1])
+#         board_tensor[ep_row, ep_col, 17] = 1
 
-    # Move encoding (planes 18-19)
-    move = chess.Move.from_uci(move_uci)
+#     # Move encoding (planes 18-19)
+#     move = chess.Move.from_uci(move_uci)
 
-    # Compute coordinates without perspective flip (since the board will be flipped later)
-    from_row = 7 - (move.from_square // 8)
-    from_col = move.from_square % 8
-    to_row = 7 - (move.to_square // 8)
-    to_col = move.to_square % 8
+#     # Compute coordinates without perspective flip (since the board will be flipped later)
+#     from_row = 7 - (move.from_square // 8)
+#     from_col = move.from_square % 8
+#     to_row = 7 - (move.to_square // 8)
+#     to_col = move.to_square % 8
 
-    board_tensor[from_row, from_col, 18] = 1
-    board_tensor[to_row, to_col, 19] = 1
+#     board_tensor[from_row, from_col, 18] = 1
+#     board_tensor[to_row, to_col, 19] = 1
 
-    # Flip the board if black to move
-    if color_to_move == chess.BLACK:
-        board_tensor = np.flip(board_tensor, axis=(0, 1)).copy()
+#     # Flip the board if black to move
+#     if color_to_move == chess.BLACK:
+#         board_tensor = np.flip(board_tensor, axis=(0, 1)).copy()
 
-    return board_tensor
+#     return board_tensor
 
 
 # def encode_action_value(fen, move_uci, input_channels=26):
@@ -260,190 +260,139 @@ def encode_action_value(fen, move_uci, input_channels=20):
 #     return board_tensor
 
 
-# def encode_action_value(fen, move_uci, input_channels=28):
-#     """
-#     Convert a FEN string into an enhanced AlphaZero-style input tensor with additional features.
+def encode_action_value(fen, move_uci, input_channels=101):
+    board = chess.Board(fen)
+    color_to_move = board.turn  # Current player's color (True=White, False=Black)
 
-#     Args:
-#         fen (str): The FEN string representing the chess position.
-#         move_uci (str): The UCI string representing the move to be made.
-#         input_channels (int): Number of input channels (default 28 for enhanced features).
+    # Initialize a single 8x8x101 tensor (28 board planes + 73 move planes)
+    action_tensor = np.zeros((8, 8, input_channels), dtype=np.float32)
 
-#     Returns:
-#         np.ndarray: A 8x8xN tensor with enhanced features including:
-#             - Piece positions (12 planes)
-#             - Player color (1 plane)
-#             - Castling rights (4 planes)
-#             - 50-move counter (1 plane)
-#             - En passant (1 plane)
-#             - Player piece masks (2 planes)
-#             - Checkerboard pattern (1 plane)
-#             - Relative material difference (1 plane)
-#             - Opposite color bishops (1 plane)
-#             - Checking pieces (1 plane)
-#             - Player material count (1 plane)
-#             - White attacks (1 plane)
-#             - Black attacks (1 plane)
-#     """
-#     # Get fen after move
-#     board = chess.Board(fen)
-#     board.push(chess.Move.from_uci(move_uci))
-#     fen = board.fen()
+    # Split the FEN into its components
+    parts = fen.split()
+    board_part = parts[0]
+    color_part = parts[1]
+    castling_part = parts[2]
+    en_passant_part = parts[3]
+    halfmove_part = int(parts[4])
+    fullmove_part = int(parts[5])
 
-#     # Initialize an 8x8xN tensor
-#     board_tensor = np.zeros((8, 8, input_channels), dtype=np.float32)
+    # Mapping from FEN characters to plane indices (0-11)
+    piece_to_plane = {
+        "P": 0,
+        "N": 1,
+        "B": 2,
+        "R": 3,
+        "Q": 4,
+        "K": 5,  # White
+        "p": 6,
+        "n": 7,
+        "b": 8,
+        "r": 9,
+        "q": 10,
+        "k": 11,  # Black
+    }
 
-#     # Split the FEN into its components
-#     parts = fen.split()
-#     board_part = parts[0]
-#     color_part = parts[1]
-#     castling_part = parts[2]
-#     en_passant_part = parts[3]
-#     halfmove_part = int(parts[4])
-#     fullmove_part = int(parts[5])
+    # Parse the board and count material
+    white_material = black_material = 0
+    row = col = 0
+    for c in board_part:
+        if c == "/":
+            row += 1
+            col = 0
+        elif c.isdigit():
+            col += int(c)
+        else:
+            plane = piece_to_plane[c]
+            action_tensor[row, col, plane] = 1
 
-#     # Mapping from FEN characters to plane indices
-#     piece_to_plane = {
-#         "P": 0,
-#         "N": 1,
-#         "B": 2,
-#         "R": 3,
-#         "Q": 4,
-#         "K": 5,  # White pieces
-#         "p": 6,
-#         "n": 7,
-#         "b": 8,
-#         "r": 9,
-#         "q": 10,
-#         "k": 11,  # Black pieces
-#     }
+            # Track material
+            val = {"P": 1, "N": 3, "B": 3, "R": 5, "Q": 9, "K": 0}.get(c.upper(), 0)
+            if c.isupper():
+                white_material += val
+            else:
+                black_material += val
+            col += 1
 
-#     # Piece value mapping
-#     piece_values = {
-#         "P": 1,
-#         "N": 3,
-#         "B": 3,
-#         "R": 5,
-#         "Q": 9,
-#         "K": 0,  # King has no value in terms of material
-#     }
+    # Attack maps
+    for square in chess.SQUARES:
+        r, c = 7 - square // 8, square % 8
+        action_tensor[r, c, 24] = len(board.attackers(chess.WHITE, square)) / 8.0
+        action_tensor[r, c, 25] = len(board.attackers(chess.BLACK, square)) / 8.0
 
-#     # Parse the board part and count material
-#     white_material = 0
-#     black_material = 0
-#     white_bishops = []
-#     black_bishops = []
+    # Game state features
+    action_tensor[:, :, 12] = 1 if color_part == "w" else 0  # Color to move
 
-#     row = 0
-#     col = 0
-#     for c in board_part:
-#         if c == "/":
-#             row += 1
-#             col = 0
-#         elif c.isdigit():
-#             col += int(c)
-#         else:
-#             plane = piece_to_plane[c]
-#             board_tensor[row, col, plane] = 1
+    # Castling rights
+    castling_map = {
+        "w": {"K": 13, "Q": 14, "k": 15, "q": 16},
+        "b": {"k": 13, "q": 14, "K": 15, "Q": 16},
+    }
+    for right, plane in castling_map[color_part].items():
+        if right in castling_part:
+            action_tensor[:, :, plane] = 1
 
-#             # Track material
-#             if c.isupper():  # White piece
-#                 white_material += piece_values[c.upper()]
-#                 if c == "B":
-#                     white_bishops.append((row, col))
-#             else:  # Black piece
-#                 black_material += piece_values[c.upper()]
-#                 if c == "b":
-#                     black_bishops.append((row, col))
+    action_tensor[:, :, 17] = min(halfmove_part / 50.0, 1.0)  # 50-move counter
 
-#             col += 1
+    # En passant
+    if en_passant_part != "-":
+        ep_col = ord(en_passant_part[0]) - ord("a")
+        ep_row = 8 - int(en_passant_part[1])
+        action_tensor[ep_row, ep_col, 18] = 1
 
-#     # Calculate attack maps
-#     white_attack_map = np.zeros((8, 8), dtype=np.float32)
-#     black_attack_map = np.zeros((8, 8), dtype=np.float32)
+    # Piece masks and other features
+    action_tensor[:, :, 19] = np.sum(action_tensor[:, :, 0:6], axis=2)  # White pieces
+    action_tensor[:, :, 20] = np.sum(action_tensor[:, :, 6:12], axis=2)  # Black pieces
+    action_tensor[:, :, 21] = np.indices((8, 8)).sum(axis=0) % 2  # Checkerboard
+    action_tensor[:, :, 22] = (white_material - black_material) / 39.0  # Material diff
+    action_tensor[:, :, 23] = (
+        white_material if color_part == "w" else black_material
+    ) / 39.0
 
-#     for square in chess.SQUARES:
-#         row = 7 - square // 8  # Convert to 0-7 row index
-#         col = square % 8
+    # Flip board if black to move
+    if color_to_move == chess.BLACK:
+        action_tensor = np.flip(action_tensor, axis=0).copy()
 
-#         # Count white attacks
-#         attackers = board.attackers(chess.WHITE, square)
-#         white_attack_map[row, col] = len(attackers) / 8.0  # Normalized
+    # Encode move (planes 28-100)
+    move = chess.Move.from_uci(move_uci)
+    from_row = 7 - (move.from_square // 8) if color_to_move else move.from_square // 8
+    from_col = move.from_square % 8
+    to_row = 7 - (move.to_square // 8) if color_to_move else move.to_square // 8
+    to_col = move.to_square % 8
+    dr, dc = to_row - from_row, to_col - from_col
 
-#         # Count black attacks
-#         attackers = board.attackers(chess.BLACK, square)
-#         black_attack_map[row, col] = len(attackers) / 8.0  # Normalized
+    # Queen moves (0-55: 8 directions × 7 distances)
+    if not move.promotion or move.promotion == chess.QUEEN:
+        if dr == 0:  # Horizontal
+            dir_idx = 0 if dc > 0 else 4
+        elif dc == 0:  # Vertical
+            dir_idx = 2 if dr > 0 else 6
+        elif dr == dc:  # Diagonal
+            dir_idx = 1 if dr > 0 else 5
+        elif dr == -dc:  # Anti-diagonal
+            dir_idx = 3 if dr > 0 else 7
+        else:  # Knight
+            dir_idx = None
 
-#     # Set color to move (plane 12: 1 for white, 0 for black)
-#     board_tensor[:, :, 12] = 1 if color_part == "w" else 0
+        if dir_idx is not None:
+            dist = max(abs(dr), abs(dc)) - 1
+            action_tensor[from_row, from_col, 28 + dir_idx * 7 + dist] = 1
 
-#     # Set castling rights (planes 13-16: K, Q, k, q)
-#     if "K" in castling_part:
-#         board_tensor[:, :, 13] = 1
-#     if "Q" in castling_part:
-#         board_tensor[:, :, 14] = 1
-#     if "k" in castling_part:
-#         board_tensor[:, :, 15] = 1
-#     if "q" in castling_part:
-#         board_tensor[:, :, 16] = 1
+    # Knight moves (56-63)
+    if abs(dr) == 2 and abs(dc) == 1 or abs(dr) == 1 and abs(dc) == 2:
+        for i, (kdr, kdc) in enumerate(
+            [(2, 1), (1, 2), (-1, 2), (-2, 1), (-2, -1), (-1, -2), (1, -2), (2, -1)]
+        ):
+            if dr == kdr and dc == kdc:
+                action_tensor[from_row, from_col, 28 + 56 + i] = 1
+                break
 
-#     # Set 50-move counter (plane 17: normalized to [0, 1])
-#     board_tensor[:, :, 17] = min(halfmove_part / 50.0, 1.0)
+    # Underpromotions (64-72: 3 directions × 3 types)
+    if move.promotion and move.promotion != chess.QUEEN:
+        dir_idx = 0 if dc == 0 else (1 if dc > 0 else 2)
+        promo_idx = {chess.KNIGHT: 0, chess.BISHOP: 1, chess.ROOK: 2}[move.promotion]
+        action_tensor[from_row, from_col, 28 + 64 + dir_idx * 3 + promo_idx] = 1
 
-#     # Set en passant square (plane 18: 1 if en passant is possible)
-#     if en_passant_part != "-":
-#         ep_col = ord(en_passant_part[0]) - ord("a")
-#         ep_row = 8 - int(en_passant_part[1])
-#         board_tensor[ep_row, ep_col, 18] = 1
-
-#     # Player piece masks (planes 19-20)
-#     board_tensor[:, :, 19] = np.sum(board_tensor[:, :, 0:6], axis=2)  # All white pieces
-#     board_tensor[:, :, 20] = np.sum(
-#         board_tensor[:, :, 6:12], axis=2
-#     )  # All black pieces
-
-#     # Checkerboard pattern (plane 21)
-#     checkerboard = np.indices((8, 8)).sum(axis=0) % 2
-#     board_tensor[:, :, 21] = checkerboard
-
-#     # Relative material difference (plane 22)
-#     material_diff = (
-#         white_material - black_material
-#     ) / 39.0  # Max possible difference is ~39 (Q+R+B+N vs 0)
-#     board_tensor[:, :, 22] = material_diff
-
-#     # Opposite color bishops (plane 23)
-#     opposite_bishops = 0
-#     if white_bishops and black_bishops:
-#         # Check if any white bishop is on opposite color of any black bishop
-#         for w_row, w_col in white_bishops:
-#             for b_row, b_col in black_bishops:
-#                 if (w_row + w_col) % 2 != (b_row + b_col) % 2:
-#                     opposite_bishops = 1
-#                     break
-#             if opposite_bishops:
-#                 break
-#     board_tensor[:, :, 23] = opposite_bishops
-
-#     # Checking pieces (plane 24)
-#     checking_pieces = 0
-#     if board.is_check():
-#         checking_pieces = (
-#             1  # Simplified - could expand to show which pieces are checking
-#         )
-#     board_tensor[:, :, 24] = checking_pieces
-
-#     # Player material count (plane 25)
-#     player_material = white_material if color_part == "w" else black_material
-#     board_tensor[:, :, 25] = player_material / 39.0  # Normalized
-
-#     # White attacks (plane 26)
-#     board_tensor[:, :, 26] = white_attack_map
-
-#     # Black attacks (plane 27)
-#     board_tensor[:, :, 27] = black_attack_map
-
-#     return board_tensor
+    return action_tensor
 
 
 def encode_win_prob(win_prob, K=64):
