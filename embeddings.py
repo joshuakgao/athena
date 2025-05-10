@@ -82,28 +82,13 @@ def encode_action_value(fen, move_uci, input_channels=20):
     # Move encoding (planes 18-19)
     move = chess.Move.from_uci(move_uci)
 
-    # Convert from square
-    from_row = (
-        7 - (move.from_square // 8)
-        if color_to_move == chess.WHITE
-        else move.from_square // 8
-    )
-    from_col = (
-        move.from_square % 8
-        if color_to_move == chess.WHITE
-        else 7 - (move.from_square % 8)
-    )
-    board_tensor[from_row, from_col, 18] = 1
+    # Compute coordinates without perspective flip (since the board will be flipped later)
+    from_row = 7 - (move.from_square // 8)
+    from_col = move.from_square % 8
+    to_row = 7 - (move.to_square // 8)
+    to_col = move.to_square % 8
 
-    # Convert to square
-    to_row = (
-        7 - (move.to_square // 8)
-        if color_to_move == chess.WHITE
-        else move.to_square // 8
-    )
-    to_col = (
-        move.to_square % 8 if color_to_move == chess.WHITE else 7 - (move.to_square % 8)
-    )
+    board_tensor[from_row, from_col, 18] = 1
     board_tensor[to_row, to_col, 19] = 1
 
     # Flip the board if black to move

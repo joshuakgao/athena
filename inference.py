@@ -96,14 +96,14 @@ def self_play(model, device, input_channels, num_random_moves=2, save_pgn=True):
 
 if __name__ == "__main__":
     # Load the model
-    model = Athena(input_channels=26, num_blocks=19, width=256, K=64)
+    model = Athena(input_channels=20, num_blocks=19, width=256, K=128)
     model.load_state_dict(
         torch.load(
-            "checkpoints/2.2_Athena_Resnet19_K=64_lr=0.00006.pt",
+            "checkpoints/2.05_Athena_Resnet19_K=128_lr=0.0001.pt",
             map_location=torch.device("cpu"),
         )
     )
     model.to("cpu")
 
     # Run self-play
-    self_play(model, device="cpu", input_channels=26)
+    self_play(model, device="cpu", input_channels=20, num_random_moves=2, save_pgn=True)
