@@ -6,4 +6,4 @@ checkpoints/
 wandb/
 nohup.out
 *.o*
-selfplay_games.pgn
+selfplay.pgn

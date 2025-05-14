@@ -28,50 +28,71 @@ def load_openings_from_pgn(pgn_path):
 
 
 def get_model_move(board, model, device, input_channels, position_counts):
-    """Get the model's move choice while avoiding 3-fold repetition, falling back to lower bins if needed."""
+    """Get the model's move choice using batch processing of all legal moves."""
     legal_moves = list(board.legal_moves)
-    bin_to_moves = defaultdict(list)
+    if not legal_moves:
+        return None
+
+    K = model.output_bins  # Number of value bins
+    middle_bin = K // 2  # Middle value bin
+
+    # Batch encode all legal moves
+    encoded_inputs = []
+    move_info = []
 
     for move in legal_moves:
-        # Encode the board state and move
-        encoded_input = (
-            torch.from_numpy(
-                encode_action_value(
-                    board.fen(),
-                    move.uci(),
-                    input_channels=input_channels,
-                )
-            )
-            .permute(2, 0, 1)
-            .float()
-            .unsqueeze(0)
-            .to(device)
+        encoded = encode_action_value(
+            board.fen(),
+            move.uci(),
+            input_channels=input_channels,
+        )
+        encoded_inputs.append(encoded)
+
+        # Check if this move would cause 3-fold repetition
+        test_board = board.copy()
+        test_board.push(move)
+        test_fen = test_board.board_fen()
+        move_info.append(
+            {"move": move, "would_repeat": position_counts.get(test_fen, 0) >= 2}
         )
 
-        # Get the value bin from the model
-        with torch.no_grad():
-            output = model(encoded_input)
-            value_bin = output.argmax(dim=1).item()
-            bin_to_moves[value_bin].append(move)
+    # Convert to tensor and batch process
+    encoded_batch = torch.stack(
+        [torch.from_numpy(x).permute(2, 0, 1).float() for x in encoded_inputs]
+    ).to(device)
 
-    # Sort bins in descending order of value
+    with torch.no_grad():
+        outputs = model(encoded_batch)
+        value_bins = outputs.argmax(dim=1).cpu().numpy()
+
+    # Adjust bins for moves that would cause repetition
+    adjusted_bins = []
+    for i, move_data in enumerate(move_info):
+        if move_data["would_repeat"]:
+            adjusted_bins.append(middle_bin)
+        else:
+            adjusted_bins.append(value_bins[i])
+
+    # Group moves by their adjusted bins
+    bin_to_moves = defaultdict(list)
+    for i, move_data in enumerate(move_info):
+        bin_to_moves[adjusted_bins[i]].append(move_data["move"])
+
+    # Sort bins in descending order and try to find non-repeating moves
     sorted_bins = sorted(bin_to_moves.keys(), reverse=True)
 
     for value_bin in sorted_bins:
         candidate_moves = bin_to_moves[value_bin]
-        non_repeating_moves = []
-
-        for move in candidate_moves:
-            test_board = board.copy()
-            test_board.push(move)
-            test_fen = test_board.board_fen()
-            if position_counts.get(test_fen, 0) < 2:
-                non_repeating_moves.append(move)
+        non_repeating_moves = [
+            move
+            for move in candidate_moves
+            if not any(m["move"] == move and m["would_repeat"] for m in move_info)
+        ]
 
         if non_repeating_moves:
             return random.choice(non_repeating_moves)
 
-    # If all moves from all bins cause repetition, fall back to highest bin and pick randomly
+    # If all moves cause repetition (unlikely), return highest value move
     return random.choice(bin_to_moves[sorted_bins[0]])
 
 
