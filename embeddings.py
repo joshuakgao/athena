@@ -410,35 +410,69 @@ def encode_action_value(fen, move_uci, input_channels=24):
 #     return action_tensor
 
 
-def encode_win_prob(win_prob, K=64):
+def encode_win_prob(win_prob, mate, K=128, M=20):
     """
-    Convert a win probability into a tensor.
+    Encode win probability and mate information into a tensor with K + 2*M bins.
+    Bin structure:
+    [-M20, ..., -M1, win_prob_bins..., M1, ..., M20]
 
     Args:
-        win_prob (float): The win probability (between 0 and 1).
-        k (int): The number of bins for the histogram.
+        win_prob (float): Win probability in [0, 1].
+        mate (int): Number of plies to mate. Positive = mate for, negative = mate against.
+        K (int): Number of win probability bins.
+        M (int): Number of mate bins on each side.
 
     Returns:
-        np.ndarray: A tensor representing the win probability.
+        np.ndarray: One-hot encoded tensor of shape (K + 2*M,)
     """
-    # Normalize the win probability to [0, k-1]
-    bin_index = int(win_prob * (K - 1))
-    tensor = np.zeros((K,), dtype=np.float32)
-    tensor[bin_index] = 1.0
+    tensor = np.zeros((K + 2 * M,), dtype=np.float32)
+
+    if mate != 0:
+        assert win_prob in (
+            1.0,
+            0.0,
+        ), "Win probability must be 1.0 or 0.0 when mate is non-zero"
+        if mate < 0:
+            # Mate-for: reverse order, M20 (fastest mate) at index 0
+            mate_index = min(-mate, M)
+            tensor[M - mate_index] = 1.0
+        elif mate > 0:
+            # Mate-against: M1 at index M+K, M20 at M+K+M-1
+            mate_index = min(mate, M)
+            tensor[M + K + (mate_index - 1)] = 1.0
+    else:
+        # Win probability: map to middle K bins
+        bin_index = int(round(win_prob * (K - 1)))
+        tensor[M + bin_index] = 1.0
+
     return tensor
 
 
-def decode_win_prob(tensor, K=64):
+def decode_win_prob(tensor, K=128, M=20):
     """
-    Decode a tensor back into a win probability.
+    Decode a tensor back into win probability and mate info.
 
     Args:
-        tensor (np.ndarray): The tensor representing the win probability.
+        tensor (np.ndarray): One-hot tensor of shape (K + 2*M,)
+        K (int): Number of win probability bins.
+        M (int): Number of mate bins on each side.
 
     Returns:
-        float: The decoded win probability.
+        tuple: (win_prob: float, mate: int)
+               If mate != 0, then win_prob is None
     """
-    # Find the index of the maximum value in the tensor
-    bin_index = np.argmax(tensor)
-    # Convert the index back to a probability
-    return bin_index / (K - 1)
+    bin_index = int(np.argmax(tensor))
+
+    if bin_index < M:
+        # Mate-for: reversed, so M20 is index 0, mate = M - index
+        mate = M - bin_index
+        return None, mate
+    elif M <= bin_index < M + K:
+        # Win prob region
+        win_prob_bin = bin_index - M
+        win_prob = win_prob_bin / (K - 1)
+        return win_prob, 0
+    else:
+        # Mate-against: M1 at index M+K, M20 at M+2M-1
+        mate = -(bin_index - (M + K) + 1)
+        return None, mate
