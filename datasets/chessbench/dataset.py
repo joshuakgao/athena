@@ -70,8 +70,10 @@ class ChessbenchDataset(Dataset):
 
         # Get and parse the record
         record = self._open_readers[bag_path][idx_in_bag]
-        fen, move, win_prob = constants.CODERS["action_value"].decode(record)
-        return fen, move, win_prob
+        fen, move, win_prob, mate = constants.CODERS["action_value_with_mate"].decode(
+            record
+        )
+        return fen, move, win_prob, mate
 
     def close(self):
         """Clean up any open file handles"""
@@ -87,3 +89,14 @@ class ChessbenchDataset(Dataset):
     def num_bags(self) -> int:
         """Return the number of bag files in this dataset"""
         return len(self.bags)
+
+
+if __name__ == "__main__":
+    # Example usage
+    dataset = ChessbenchDataset(dir="datasets/chessbench/data_mate", mode="test")
+    print(f"Total records: {len(dataset)}")
+    print(f"Number of bags: {dataset.num_bags}")
+
+    for i in range(len(dataset)):
+        fen, move, win_prob, mate = dataset[i]
+        print(f"Record {i}: {fen}, {move}, {win_prob}, {mate}")

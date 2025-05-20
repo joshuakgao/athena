@@ -31,13 +31,15 @@ def add_mate_annotations(input_bag, output_bag, max_datapoints=None):
                 if max_datapoints is not None and idx >= max_datapoints:
                     break
                 fen, move, win_prob = constants.CODERS["action_value"].decode(record)
-                mate = 0
+                mate = "-"
                 if win_prob in (1.0, 0.0):
                     board = chess.Board(fen)
                     board.push(chess.Move.from_uci(move))
                     info = engine.analyse(board, chess.engine.Limit(time=0.05))
                     score = info.get("score")
-                    if score is not None and score.is_mate():
+                    if board.is_checkmate():
+                        mate = "#"
+                    elif score is not None and score.is_mate():
                         mate = score.relative.mate() * -1
 
                 new_record = constants.CODERS["action_value_with_mate"].encode(

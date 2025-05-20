@@ -35,8 +35,8 @@ class Athena(nn.Module):
         self.K = K
         self.M = M
         self.output_bins = (
-            K + 2 * M
-        )  # K for win probs, 2*M for mate-for and mate-against
+            K + 2 * M + 1
+        )  # K for win probs, 2*M for mate-for and mate-against, 1 for checkmate
 
         # Initial convolution
         self.conv1 = nn.Conv2d(input_channels, width, kernel_size=3, padding=1)
