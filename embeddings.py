@@ -130,27 +130,28 @@ def encode_win_prob(win_prob, mate, K=128, M=20):
     Returns:
         np.ndarray: One-hot encoded tensor of shape (K + 2*M,)
     """
-    win_prob = float(win_prob)
+    assert 0.0 <= win_prob <= 1.0
+
     tensor = np.zeros((K + 2 * M + 1,), dtype=np.float32)
 
     if isinstance(mate, str):
+        assert mate in ("#", "-"), f"Unrecognized mate string: {mate}"
         if mate == "#":
-            assert win_prob == 1, "Win probability must be 1.0 for mate-for"
+            assert win_prob == 1.0
             index = -1
         elif mate == "-":
-            # No mate: encode win probability
-            assert 0.0 <= win_prob <= 1.0, "Win probability must be in [0, 1]"
-            assert mate == "-", "Mate must be '-' for non-mate cases"
             index = M + int(round(win_prob * (K - 1)))
     else:
+        assert mate != 0
         if mate > 0:
-            assert win_prob == 1, "Win probability must be 1.0 for mate-for"
-            # Mate for (we are mating the opponent in mate plies)
+            assert win_prob == 1.0
             index = K + 2 * M - min(mate, M)
         elif mate < 0:
-            assert win_prob == 0, "Win probability must be 0.0 for mate-against"
-            # Mate against (opponent is mating us in -mate plies)
+            assert win_prob == 0.0
             index = M - min(-mate, M)
+        else:
+            raise ValueError(f"Invalid mate value: {mate}")
 
+    assert -1 <= index < len(tensor), f"Index {index} out of bounds"
     tensor[index] = 1.0
     return tensor

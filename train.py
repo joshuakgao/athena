@@ -340,21 +340,20 @@ def train_athena(config):
 if __name__ == "__main__":
     # Configuration
     config = {
-        "model_name": "2.08_Athena_Resnet19_K=128_lr=0.0001",
+        "model_name": "2.08_Athena_Resnet19_K=128_M=16_lr=0.0001",
         "description": "Added mating output bins to better close out games.",
         "epochs": 3,
         "lr": 0.0001,
         "lr_decay_rate": 1,
         "batch_size": 4096,
-        "use_wandb": False,
+        "use_wandb": True,
         "num_blocks": 19,
         "width": 256,
         "K": 128,  # num bins for win probability histogram
-        "M": 20,  # num bins for mating histogram
+        "M": 16,  # num bins for mating histogram
         "input_channels": 24,  # Number of input channels (planes)
         # logs config
-        "val_frequency": 4096 * 128,
-        # "val_frequency": 2**25,
+        "val_frequency": 2**25,
         "train_log_frequency": 4096,
     }
 

@@ -281,10 +281,12 @@ def self_play(model, device, input_channels, openings, save_pgn=True):
 
 if __name__ == "__main__":
     # Load the model
-    model = Athena(input_channels=24, num_blocks=19, width=256, K=128)
+    model = Athena(
+        input_channels=24, num_blocks=19, width=256, K=128, M=16, device="cpu"
+    )
     model.load_state_dict(
         torch.load(
-            "checkpoints/2.07_Athena_Resnet19_K=128_lr=0.0001.pt",
+            "checkpoints/2.08_Athena_Resnet19_K=128_M=16_lr=0.0001.pt",
             map_location=torch.device("cpu"),
         )
     )
