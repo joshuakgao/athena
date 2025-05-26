@@ -47,7 +47,7 @@ class AthenaEngine(MinimalEngine):
         """
         Score all legal moves using the model and return the best one.
 
-        Randomly choose among top 3 if it's the first move of the game.
+        Randomly choose among top 5 if it's the first move of the game.
         """
         legal_moves = (
             root_moves if isinstance(root_moves, list) else list(board.legal_moves)
@@ -93,9 +93,9 @@ class AthenaEngine(MinimalEngine):
         # Filter out repeats unless all repeat
         filtered = [i for i in ranked if not meta[i][1]] or ranked
 
-        # Use top-3 random sampling only if it's the first move
+        # Use top-5 random sampling only if it's the first two moves
         if board.fullmove_number == 1 and len(board.move_stack) == 0:
-            top = filtered[: min(3, len(filtered))]
+            top = filtered[: min(5, len(filtered))]
             choice_idx = random.choice(top)
         else:
             choice_idx = filtered[0]
