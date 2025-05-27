@@ -56,7 +56,7 @@ class AthenaEngine(MinimalEngine):
             return PlayResult(None, None)
 
         K = self.model.output_bins
-        draw_bin = int(K * 0.45)
+        draw_bin = int(K * 0.33)
 
         encoded_batch = []
         meta = []  # (move, would_repeat)
