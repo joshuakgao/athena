@@ -93,9 +93,9 @@ class AthenaEngine(MinimalEngine):
         # Filter out repeats unless all repeat
         filtered = [i for i in ranked if not meta[i][1]] or ranked
 
-        # Use top-5 random sampling only if it's the first two moves
+        # Use top-3 random sampling only if it's the first two moves
         if board.fullmove_number == 1 and len(board.move_stack) == 0:
-            top = filtered[: min(5, len(filtered))]
+            top = filtered[: min(3, len(filtered))]
             choice_idx = random.choice(top)
         else:
             choice_idx = filtered[0]
