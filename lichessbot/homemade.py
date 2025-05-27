@@ -56,7 +56,7 @@ class AthenaEngine(MinimalEngine):
             return PlayResult(None, None)
 
         K = self.model.output_bins
-        middle_bin = K // 2
+        draw_bin = int(K * 0.45)
 
         encoded_batch = []
         meta = []  # (move, would_repeat)
@@ -81,7 +81,7 @@ class AthenaEngine(MinimalEngine):
         adjusted = best_bins.cpu().tolist()
         for i, (_, rep) in enumerate(meta):
             if rep:
-                adjusted[i] = middle_bin
+                adjusted[i] = draw_bin
 
         # Rank moves
         ranked = sorted(
