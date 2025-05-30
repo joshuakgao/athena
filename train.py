@@ -9,13 +9,12 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import wandb
-from architecture import Athena
+from architectures.resnet import AthenaResnet
 from datasets.chessbench.dataset import ChessbenchDataset
-from embeddings import encode_action_value, encode_win_prob
 from utils.logger import logger
 
 
-def solve_puzzles(model, puzzle_file, device, max_puzzles=100):
+def solve_puzzles(model, puzzle_file, device, max_puzzles=1000):
     """
     Evaluate tactical-puzzle accuracy.
 
@@ -62,7 +61,7 @@ def solve_puzzles(model, puzzle_file, device, max_puzzles=100):
                     for move in legal_moves:
                         feat = (
                             torch.from_numpy(
-                                encode_action_value(
+                                model.encode_action_value(
                                     board.fen(),
                                     move.uci(),
                                     input_channels=config["input_channels"],
@@ -115,7 +114,7 @@ def custom_collate_fn(batch):
 
 def train_athena(config):
     # Define model
-    model = Athena(
+    model = AthenaResnet(
         input_channels=config["input_channels"],
         num_blocks=config["num_blocks"],
         width=config["width"],
@@ -182,7 +181,9 @@ def train_athena(config):
                 # Encode FEN
                 fen_tensor = (
                     torch.from_numpy(
-                        encode_action_value(fen, move, input_channels=INPUT_CHANNELS)
+                        model.encode_action_value(
+                            fen, move, input_channels=INPUT_CHANNELS
+                        )
                     )
                     .permute(2, 0, 1)
                     .float()
@@ -191,7 +192,7 @@ def train_athena(config):
 
                 # Encode win probability
                 target = torch.from_numpy(
-                    encode_win_prob(win_prob, mate, K=K, M=M)
+                    model.encode_win_prob(win_prob, mate, K=K, M=M)
                 ).float()
                 targets.append(target)
 
@@ -266,7 +267,7 @@ def train_athena(config):
                         ):
                             fen_tensor = (
                                 torch.from_numpy(
-                                    encode_action_value(
+                                    model.encode_action_value(
                                         fen, move, input_channels=INPUT_CHANNELS
                                     )
                                 )
@@ -276,7 +277,7 @@ def train_athena(config):
                             val_inputs.append(fen_tensor)
 
                             target = torch.from_numpy(
-                                encode_win_prob(win_prob, mate, K=K, M=M)
+                                model.encode_win_prob(win_prob, mate, K=K, M=M)
                             ).float()
                             val_targets.append(target)
 
@@ -301,7 +302,7 @@ def train_athena(config):
                     model,
                     "datasets/chessbench/data/puzzles.csv",
                     model.device,
-                    max_puzzles=100,
+                    max_puzzles=1000,
                 )
 
                 # Log metrics to WandB
@@ -346,7 +347,7 @@ if __name__ == "__main__":
         "lr": 0.0001,
         "lr_decay_rate": 1,
         "batch_size": 4096,
-        "use_wandb": True,
+        "use_wandb": False,
         "num_blocks": 19,
         "width": 256,
         "K": 128,  # num bins for win probability histogram
