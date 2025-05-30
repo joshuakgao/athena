@@ -29,7 +29,7 @@ class AthenaResnet(nn.Module):
         width=256,
         num_blocks=19,
         K=128,
-        M=20,
+        M=32,
         device="auto",
     ):
         super(AthenaResnet, self).__init__()

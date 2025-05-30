@@ -10,6 +10,7 @@ from tqdm import tqdm
 
 import wandb
 from architectures.resnet import AthenaResnet
+from architectures.transformer import AthenaTransformer
 from datasets.chessbench.dataset import ChessbenchDataset
 from utils.logger import logger
 
@@ -37,7 +38,7 @@ def solve_puzzles(model, puzzle_file, device, max_puzzles=1000):
             if _ == max_puzzles:
                 break
 
-            logger.info(row["FEN"])
+            # logger.info(row["FEN"])
             board = chess.Board(row["FEN"])
             target = row["Moves"].split()
 
@@ -93,8 +94,8 @@ def solve_puzzles(model, puzzle_file, device, max_puzzles=1000):
                         sequence_ok = False
                         break
 
-            logger.info(f"Predicted moves: {predicted_moves}")
-            logger.info(f"Target moves: {target}")
+            # logger.info(f"Predicted moves: {predicted_moves}")
+            # logger.info(f"Target moves: {target}")
             if solved_by_mate or (sequence_ok and predicted_moves == target):
                 correct += 1
             total += 1
@@ -112,15 +113,7 @@ def custom_collate_fn(batch):
     return list(fens), list(moves), list(win_probs), list(mates)
 
 
-def train_athena(config):
-    # Define model
-    model = AthenaResnet(
-        input_channels=config["input_channels"],
-        num_blocks=config["num_blocks"],
-        width=config["width"],
-        K=config["K"],
-        M=config["M"],
-    )
+def train_athena(model: AthenaResnet, config):
     model.to(model.device)
     logger.info(f"Model parameters: {model.count_parameters() / 1e6:.2f}M")
 
@@ -254,7 +247,7 @@ def train_athena(config):
                         val_win_probs,
                         val_mates,
                     ) in tqdm(enumerate(val_loader), total=len(val_loader)):
-                        if config["batch_size"] * val_batch_idx > 2**15:
+                        if val_batch_idx > 1000:
                             break
 
                         if val_win_probs[0] is None:
@@ -339,24 +332,60 @@ def train_athena(config):
 
 # Example usage:
 if __name__ == "__main__":
-    # Configuration
-    config = {
-        "model_name": "2.08_Athena_Resnet19_K=128_M=16_lr=0.0001",
-        "description": "Added mating output bins to better close out games.",
-        "epochs": 3,
-        "lr": 0.0001,
-        "lr_decay_rate": 1,
-        "batch_size": 4096,
-        "use_wandb": False,
-        "num_blocks": 19,
-        "width": 256,
-        "K": 128,  # num bins for win probability histogram
-        "M": 16,  # num bins for mating histogram
-        "input_channels": 24,  # Number of input channels (planes)
-        # logs config
-        "val_frequency": 2**25,
-        "train_log_frequency": 4096,
-    }
+    model_arch = "resnet"  # or "transformer"
+    if model_arch == "resnet":
+        config = {
+            "model_name": "2.08_Athena_Resnet19_K=128_M=16_lr=0.0001",
+            "description": "Added mating output bins to better close out games.",
+            "epochs": 3,
+            "lr": 0.0001,
+            "lr_decay_rate": 1,
+            "batch_size": 4096,
+            "use_wandb": False,
+            "K": 128,  # num bins for win probability histogram
+            "M": 16,  # num bins for mating histogram
+            "input_channels": 24,  # Number of input channels (planes)
+            # logs config
+            "val_frequency": 2**25,
+            "train_log_frequency": 4096,
+            # model config
+            "num_blocks": 19,
+            "width": 256,
+        }
+        model = AthenaResnet(
+            input_channels=config["input_channels"],
+            width=config["width"],
+            num_blocks=config["num_blocks"],
+            K=config["K"],
+            M=config["M"],
+        )
+    elif model_arch == "transformer":
+        config = {
+            "model_name": "2.09_AthenaTransformer_K=128_M=16_lr=0.0001",
+            "description": "Added mating output bins to better close out games.",
+            "epochs": 3,
+            "lr": 0.0001,
+            "lr_decay_rate": 1,
+            "batch_size": 4096,
+            "use_wandb": False,
+            "K": 128,  # num bins for win probability histogram
+            "M": 16,  # num bins for mating histogram
+            "input_channels": 24,  # Number of input channels (planes)
+            # logs config
+            "val_frequency": 2**25,
+            "train_log_frequency": 4096,
+            # model config
+            "dim": 256,  # Model dimension
+            "heads": 8,  # Number of attention heads
+            "depth": 8,  # Number of transformer layers
+        }
+        model = AthenaTransformer(
+            dim=config["dim"],
+            heads=config["heads"],
+            depth=config["depth"],
+            K=config["K"],
+            M=config["M"],
+        )
 
     K = config["K"]
     M = config["M"]
@@ -364,4 +393,4 @@ if __name__ == "__main__":
 
     logger.info(config)
     # Start training
-    train_athena(config)
+    train_athena(model, config)
