@@ -20,4 +20,4 @@
 # FOR SAIL:
 free -h
 df -h
-~/.conda/envs/athena/bin/python train.py
+~/.conda/envs/athena/bin/python train.py --model_arch="vit"

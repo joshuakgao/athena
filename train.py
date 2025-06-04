@@ -1,3 +1,4 @@
+import argparse
 import os
 
 import chess
@@ -10,7 +11,7 @@ from tqdm import tqdm
 
 import wandb
 from architectures.resnet import AthenaResnet
-from architectures.transformer import AthenaTransformer
+from architectures.vit import AthenaViT
 from datasets.chessbench.dataset import ChessbenchDataset
 from utils.logger import logger
 
@@ -332,7 +333,17 @@ def train_athena(model: AthenaResnet, config):
 
 # Example usage:
 if __name__ == "__main__":
-    model_arch = "resnet"  # or "transformer"
+    parser = argparse.ArgumentParser(description="Train Athena model.")
+    parser.add_argument(
+        "--model_arch",
+        type=str,
+        default="vit",
+        choices=["resnet", "transformer", "vit"],
+        help="Model architecture to train",
+    )
+    args = parser.parse_args()
+    model_arch = args.model_arch
+
     if model_arch == "resnet":
         config = {
             "model_name": "2.08_Athena_Resnet19_K=128_M=16_lr=0.0001",
@@ -359,30 +370,36 @@ if __name__ == "__main__":
             K=config["K"],
             M=config["M"],
         )
-    elif model_arch == "transformer":
+    elif model_arch == "vit":
         config = {
-            "model_name": "2.09_AthenaTransformer_K=128_M=16_lr=0.0001",
-            "description": "Added mating output bins to better close out games.",
+            "model_name": "2.10_AthenaViT_K=128_M=16_lr=0.0001",
+            "description": "Vision Transformer for chess value modeling.",
             "epochs": 3,
             "lr": 0.0001,
             "lr_decay_rate": 1,
-            "batch_size": 4096,
-            "use_wandb": False,
-            "K": 128,  # num bins for win probability histogram
-            "M": 16,  # num bins for mating histogram
-            "input_channels": 24,  # Number of input channels (planes)
+            "batch_size": 128,
+            "use_wandb": True,
+            "K": 128,
+            "M": 16,
+            "input_channels": 24,
             # logs config
             "val_frequency": 2**25,
             "train_log_frequency": 4096,
-            # model config
-            "dim": 256,  # Model dimension
-            "heads": 8,  # Number of attention heads
-            "depth": 8,  # Number of transformer layers
+            # ViT-specific
+            "embed_dim": 256,
+            "patch_size": 1,
+            "depth": 12,
+            "n_heads": 8,
+            "mlp_ratio": 4.0,
         }
-        model = AthenaTransformer(
-            dim=config["dim"],
-            heads=config["heads"],
+
+        model = AthenaViT(
+            input_channels=config["input_channels"],
+            patch_size=config["patch_size"],
+            embed_dim=config["embed_dim"],
             depth=config["depth"],
+            n_heads=config["n_heads"],
+            mlp_ratio=config["mlp_ratio"],
             K=config["K"],
             M=config["M"],
         )
