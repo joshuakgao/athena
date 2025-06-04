@@ -386,9 +386,9 @@ if __name__ == "__main__":
             "val_frequency": 2**25,
             "train_log_frequency": 4096,
             # ViT-specific
-            "embed_dim": 256,
+            "embed_dim": 1024,
             "patch_size": 1,
-            "depth": 12,
+            "depth": 11,
             "n_heads": 8,
             "mlp_ratio": 4.0,
         }
