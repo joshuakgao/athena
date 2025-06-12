@@ -6,3 +6,5 @@
 
 cd /project/hoskere/jkgao/athena/datasets/chessbench
 tar -cf - data_mate/ | pigz -p 32 > data_mate.tar.gz
+
+echo "Zipping completed successfully."

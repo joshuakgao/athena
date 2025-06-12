@@ -93,7 +93,7 @@ class ChessbenchDataset(Dataset):
 
 if __name__ == "__main__":
     # Example usage
-    dataset = ChessbenchDataset(dir="datasets/chessbench/data_mate", mode="test")
+    dataset = ChessbenchDataset(dir="datasets/chessbench/data_mate", mode="train")
     print(f"Total records: {len(dataset)}")
     print(f"Number of bags: {dataset.num_bags}")
 

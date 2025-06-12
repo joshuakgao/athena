@@ -4,7 +4,7 @@ INPUT_DIR="datasets/chessbench/data/train"
 OUTPUT_DIR="datasets/chessbench/data_mate/train"
 SCRIPT_PATH="datasets/chessbench/add_mating_data.py"
 ENV_PATH="/project/hoskere/jkgao/.conda/envs/athena"
-N_JOBS=401
+N_JOBS=450
 
 mkdir -p "$OUTPUT_DIR"
 mkdir -p slurm_jobs
@@ -21,7 +21,7 @@ cat <<EOF > "$TEST_JOB_SCRIPT"
 #!/bin/bash
 #SBATCH -J test
 #SBATCH -o logs/test.out
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=16
 #SBATCH -t 10:0:0
 #SBATCH --mem-per-cpu=4GB
 
@@ -53,7 +53,7 @@ for ((i=0; i<N_JOBS; i++)); do
 #!/bin/bash
 #SBATCH -J chunk${i}
 #SBATCH -o $LOG_FILE
-#SBATCH --cpus-per-task=1
+#SBATCH --cpus-per-task=16
 #SBATCH -t 10:0:0
 #SBATCH --mem-per-cpu=4GB
 

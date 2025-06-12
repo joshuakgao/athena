@@ -11,69 +11,59 @@ Mate labels:
 
 import argparse
 import os
+from multiprocessing import Pool, cpu_count
 
 import chess
 import chess.engine
 from tqdm import tqdm
 
-from datasets.chessbench.utils import constants
 from datasets.chessbench.utils.bagz import BagReader, BagWriter
 
-ENGINE_PATH = "models/stockfish"  # adjust if necessary
-ENGINE_LIMIT = chess.engine.Limit(time=0.05)  # 50 ms per position
+ENGINE_PATH = "models/stockfish"
+ENGINE_LIMIT = chess.engine.Limit(time=0.05)
+
+
+def annotate_single_record(record: bytes) -> bytes:
+    from datasets.chessbench.utils.constants import CODERS
+
+    fen, move_str, win_prob = CODERS["action_value"].decode(record)
+    board = chess.Board(fen)
+    mover = board.turn
+    move = chess.Move.from_uci(move_str)
+    board.push(move)
+
+    mate_label: str | int = "-"
+
+    if board.is_checkmate():
+        mate_label = "#"
+    elif win_prob in (1.0, 0.0):
+        with chess.engine.SimpleEngine.popen_uci(ENGINE_PATH) as engine:
+            info = engine.analyse(board, ENGINE_LIMIT)
+            score = info.get("score")
+            if score and score.is_mate():
+                mate_label = score.pov(mover).mate()
+
+    return CODERS["action_value_with_mate"].encode(
+        (fen, move_str, win_prob, mate_label)
+    )
 
 
 def add_mate_annotations(
     input_bag: str, output_bag: str, max_datapoints: int | None = None
 ) -> None:
-    """Read `input_bag`, annotate with mate info, and write to `output_bag`."""
     reader = BagReader(input_bag)
     writer = BagWriter(output_bag)
 
-    total_records = len(reader) if hasattr(reader, "__len__") else None
-    if max_datapoints is not None:
-        total_records = (
-            min(total_records, max_datapoints)
-            if total_records is not None
-            else max_datapoints
-        )
+    records = list(reader)[:max_datapoints] if max_datapoints else list(reader)
 
-    with chess.engine.SimpleEngine.popen_uci(ENGINE_PATH) as engine, tqdm(
-        total=total_records,
-        unit="record",
-        desc=f"Annotating {os.path.basename(input_bag)}",
-    ) as pbar:
-
-        for idx, record in enumerate(reader):
-            if max_datapoints is not None and idx >= max_datapoints:
-                break
-
-            fen, move_str, win_prob = constants.CODERS["action_value"].decode(record)
-            board = chess.Board(fen)
-            mover = board.turn  # colour that made `move_str`
-            move = chess.Move.from_uci(move_str)
-            board.push(move)
-
-            mate_label: str | int = "-"
-
-            # Immediate mate by the move itself
-            if board.is_checkmate():
-                mate_label = "#"
-
-            # Otherwise let Stockfish evaluate
-            elif win_prob in (1.0, 0.0):
-                info = engine.analyse(board, ENGINE_LIMIT)
-                score = info.get("score")
-                if score is not None and score.is_mate():
-                    # Re-orient the score to the player who just moved
-                    mate_label = score.pov(mover).mate()  # ±N in plies
-
-            # Encode and write the new record
-            new_record = constants.CODERS["action_value_with_mate"].encode(
-                (fen, move_str, win_prob, mate_label)
-            )
-            writer.write(new_record)
-            pbar.update(1)
+    print(cpu_count(), flush=True)
+    with Pool(processes=cpu_count()) as pool:
+        for annotated_record in tqdm(
+            pool.imap(annotate_single_record, records),
+            total=len(records),
+            unit="record",
+        ):
+            writer.write(annotated_record)
 
     writer.close()
 
