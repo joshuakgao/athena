@@ -180,7 +180,7 @@ class AthenaResnet(nn.Module):
 
         return board_tensor
 
-    def encode_win_prob(self, win_prob, mate, K=128, M=20):
+    def encode_win_prob(self, win_prob, mate):
         """
         Encode win probability and mate information into a tensor with K + 2*M + 1 bins.
         We need the extra bin for the move that checkmates the opponent.
@@ -195,11 +195,11 @@ class AthenaResnet(nn.Module):
             M (int): Number of mate bins on each side.
 
         Returns:
-            np.ndarray: One-hot encoded tensor of shape (K + 2*M,)
+            np.ndarray: One-hot encoded tensor of shape (K + 2*M + 1,)
         """
         assert 0.0 <= win_prob <= 1.0
 
-        tensor = np.zeros((K + 2 * M + 1,), dtype=np.float32)
+        tensor = np.zeros((self.K + 2 * self.M + 1,), dtype=np.float32)
 
         if isinstance(mate, str):
             assert mate in ("#", "-"), f"Unrecognized mate string: {mate}"
@@ -207,18 +207,34 @@ class AthenaResnet(nn.Module):
                 assert win_prob == 1.0
                 index = -1
             elif mate == "-":
-                index = M + int(round(win_prob * (K - 1)))
+                index = self.M + int(round(win_prob * (self.K - 1)))
         else:
             assert mate != 0
             if mate > 0:
                 assert win_prob == 1.0
-                index = K + 2 * M - min(mate, M)
+                index = self.K + 2 * self.M - min(mate, self.M)
             elif mate < 0:
                 assert win_prob == 0.0
-                index = M - min(-mate, M)
+                index = self.M - min(-mate, self.M)
             else:
                 raise ValueError(f"Invalid mate value: {mate}")
 
         assert -1 <= index < len(tensor), f"Index {index} out of bounds"
         tensor[index] = 1.0
         return tensor
+
+    def decode_win_prob_bins(self, tensor):
+        assert len(tensor) == self.output_bins
+        index = np.argmax(tensor)
+
+        if index == self.output_bins - 1:
+            return 1.0, "#"
+        elif index < self.M:
+            return 0.0, -(self.M - index)
+        elif index < self.M + self.K:
+            win_prob = (index - self.M) / (self.K - 1)
+            return win_prob, "-"
+        else:
+            # Positive mate bins (inverted order)
+            mate = self.K + 2 * self.M - index
+            return 1.0, mate
