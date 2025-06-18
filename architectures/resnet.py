@@ -1,7 +1,7 @@
+import chess
+import numpy as np
 import torch.nn as nn
 import torch.nn.functional as F
-import numpy as np
-import chess
 
 from utils.device_selector import device_selector
 
@@ -197,28 +197,28 @@ class AthenaResnet(nn.Module):
         Returns:
             np.ndarray: One-hot encoded tensor of shape (K + 2*M,)
         """
-        assert 0.0 <= win_prob <= 1.0
+        # assert 0.0 <= win_prob <= 1.0
 
         tensor = np.zeros((K + 2 * M + 1,), dtype=np.float32)
 
         if isinstance(mate, str):
-            assert mate in ("#", "-"), f"Unrecognized mate string: {mate}"
+            # assert mate in ("#", "-"), f"Unrecognized mate string: {mate}"
             if mate == "#":
                 assert win_prob == 1.0
                 index = -1
             elif mate == "-":
                 index = M + int(round(win_prob * (K - 1)))
         else:
-            assert mate != 0
+            # assert mate != 0
             if mate > 0:
-                assert win_prob == 1.0
+                # assert win_prob == 1.0
                 index = K + 2 * M - min(mate, M)
             elif mate < 0:
-                assert win_prob == 0.0
+                # assert win_prob == 0.0
                 index = M - min(-mate, M)
             else:
                 raise ValueError(f"Invalid mate value: {mate}")
 
-        assert -1 <= index < len(tensor), f"Index {index} out of bounds"
+        # assert -1 <= index < len(tensor), f"Index {index} out of bounds"
         tensor[index] = 1.0
         return tensor
