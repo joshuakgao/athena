@@ -1,14 +1,11 @@
 import bisect
-import os
-import sys
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from torch.utils.data import Dataset
 
-sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../..")))
-from datasets.chessbench.utils import constants
-from datasets.chessbench.utils.bagz import BagReader
+from datasets.chessbenchmate.utils import constants
+from datasets.chessbenchmate.utils.bagz import BagReader
 
 
 class ChessbenchDataset(Dataset):

@@ -17,15 +17,14 @@ import chess
 import chess.engine
 from tqdm import tqdm
 
-from datasets.chessbench.utils.bagz import BagReader, BagWriter
+from datasets.chessbenchmate.utils.bagz import BagReader, BagWriter
+from datasets.chessbenchmate.utils.constants import CODERS
 
 ENGINE_PATH = "models/stockfish"
 ENGINE_LIMIT = chess.engine.Limit(time=0.05)
 
 
 def annotate_single_record(record: bytes) -> bytes:
-    from datasets.chessbench.utils.constants import CODERS
-
     fen, move_str, win_prob = CODERS["action_value"].decode(record)
     board = chess.Board(fen)
     mover = board.turn
