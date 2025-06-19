@@ -166,8 +166,9 @@ class AthenaViT(nn.Module):
         self.device = device_selector("auto", label="AthenaViT")
         self.K = K
         self.M = M
-
-        total_bins = K + 2 * M + 1
+        self.output_bins = (
+            K + 2 * M + 1
+        )  # K for win probs, 2*M for mate-for and mate-against, 1 for checkmate
 
         # Verify patch size divides board size
         assert (
@@ -201,7 +202,7 @@ class AthenaViT(nn.Module):
         # Classification head for win probability bins
         self.norm = nn.LayerNorm(embed_dim)
         self.head = nn.Linear(
-            embed_dim, total_bins
+            embed_dim, self.output_bins
         )  # Now matches encode_win_prob dimensions
 
         # Initialize weights

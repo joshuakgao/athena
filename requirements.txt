@@ -6,4 +6,3 @@ wandb
 pandas
 apache-beam
 pytest
-mamba-ssm

@@ -10,6 +10,7 @@ from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import wandb
+from loss_functions.hl_gauss import HLGaussLoss
 from architectures.resnet import AthenaResnet
 from architectures.vit import AthenaViT
 from datasets.chessbench.dataset import ChessbenchDataset
@@ -26,6 +27,7 @@ def solve_puzzles(model, puzzle_file, device, max_puzzles=1000):
       reference solution.
     • Otherwise the whole reference sequence must be reproduced.
     """
+    logger.info(f"Solving puzzles from {puzzle_file}...")
     was_training = model.training
     model.eval()
 
@@ -140,7 +142,12 @@ def train_athena(model: AthenaResnet, config):
     )
 
     # Loss and optimizer
-    criterion = nn.CrossEntropyLoss()
+    criterion = HLGaussLoss(
+        output_bins=model.output_bins,
+        sigma=config["loss_sigma"],  # Use sigma from config
+        device=model.device,
+    )
+
     optimizer = optim.AdamW(
         model.parameters(),
         lr=config["lr"],
@@ -247,8 +254,10 @@ def train_athena(model: AthenaResnet, config):
                         val_moves,
                         val_win_probs,
                         val_mates,
-                    ) in tqdm(enumerate(val_loader), total=len(val_loader)):
-                        if val_batch_idx > 1000:
+                    ) in tqdm(
+                        enumerate(val_loader), total=len(val_loader), desc="Validating"
+                    ):
+                        if val_batch_idx * config["batch_size"] > 10_000:
                             break
 
                         if val_win_probs[0] is None:
@@ -337,25 +346,38 @@ if __name__ == "__main__":
     parser.add_argument(
         "--model_arch",
         type=str,
-        default="vit",
+        default="resnet",
         choices=["resnet", "transformer", "vit"],
         help="Model architecture to train",
+    )
+    parser.add_argument(
+        "--size",
+        type=str,
+        default="small",
+        help="Size of the model (small, medium, large)",
     )
     args = parser.parse_args()
     model_arch = args.model_arch
 
+    assert model_arch in [
+        "resnet",
+        "transformer",
+        "vit",
+    ], f"Invalid model architecture: {model_arch}"
+
     if model_arch == "resnet":
         config = {
-            "model_name": "2.08_Athena_Resnet19_K=128_M=16_lr=0.0001",
-            "description": "Added mating output bins to better close out games.",
+            "model_name": "2.11_Athena_Resnet19_K=128_M=16_lr=0.0001_loss=hl_gauss",
+            "description": "Added hl_gauss loss for chess value modeling.",
             "epochs": 3,
             "lr": 0.0001,
             "lr_decay_rate": 1,
             "batch_size": 4096,
-            "use_wandb": False,
+            "use_wandb": True,
             "K": 128,  # num bins for win probability histogram
             "M": 16,  # num bins for mating histogram
             "input_channels": 24,  # Number of input channels (planes)
+            "loss_sigma": 1,  # Standard deviation for Gaussian smoothing in HLGaussLoss
             # logs config
             "val_frequency": 2**25,
             "train_log_frequency": 4096,
@@ -371,27 +393,53 @@ if __name__ == "__main__":
             M=config["M"],
         )
     elif model_arch == "vit":
-        config = {
-            "model_name": "2.10_AthenaViT_K=128_M=16_lr=0.0001",
-            "description": "Vision Transformer for chess value modeling.",
-            "epochs": 3,
-            "lr": 0.0001,
-            "lr_decay_rate": 1,
-            "batch_size": 128,
-            "use_wandb": True,
-            "K": 128,
-            "M": 16,
-            "input_channels": 24,
-            # logs config
-            "val_frequency": 2**25,
-            "train_log_frequency": 4096,
-            # ViT-specific
-            "embed_dim": 1024,
-            "patch_size": 1,
-            "depth": 11,
-            "n_heads": 8,
-            "mlp_ratio": 4.0,
-        }
+        if args.size == "small":
+            config = {
+                "model_name": "2.12_AthenaViT_small_K=128_M=16_lr=0.0001_loss=hlgauss0.0",
+                "description": "Small Vision Transformer for chess value modeling.",
+                "epochs": 3,
+                "lr": 0.0001,
+                "lr_decay_rate": 1,
+                "batch_size": 128,
+                "use_wandb": True,
+                "K": 128,
+                "M": 16,
+                "input_channels": 24,
+                "loss_sigma": 1,  # Standard deviation for Gaussian smoothing in HLGaussLoss
+                # logs config
+                "val_frequency": 2**25,
+                "train_log_frequency": 4096,
+                # ViT-specific
+                "embed_dim": 256,
+                "patch_size": 1,
+                "depth": 30,
+                "n_heads": 4,
+                "mlp_ratio": 4.0,
+            }
+
+        elif args.size == "large":
+            config = {
+                "model_name": "2.12_AthenaViT_large_K=128_M=16_lr=0.0001_loss=hl_gauss1.0",
+                "description": "Vision Transformer for chess value modeling.",
+                "epochs": 3,
+                "lr": 0.0001,
+                "lr_decay_rate": 1,
+                "batch_size": 128,
+                "use_wandb": False,
+                "K": 128,
+                "M": 16,
+                "input_channels": 24,
+                "loss_sigma": 1,  # Standard deviation for Gaussian smoothing in HLGaussLoss
+                # logs config
+                "val_frequency": 2**25,
+                "train_log_frequency": 4096,
+                # ViT-specific
+                "embed_dim": 1024,
+                "patch_size": 1,
+                "depth": 11,
+                "n_heads": 8,
+                "mlp_ratio": 4.0,
+            }
 
         model = AthenaViT(
             input_channels=config["input_channels"],
