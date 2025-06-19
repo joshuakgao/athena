@@ -1,8 +1,8 @@
 #!/bin/bash
 
 INPUT_DIR="datasets/chessbench/data/train"
-OUTPUT_DIR="datasets/chessbenchmate/data/train"
-SCRIPT_PATH="datasets/chessbenchmate/add_mating_data.py"
+OUTPUT_DIR="datasets/chessbenchm/data/train"
+SCRIPT_PATH="datasets/chessbenchm/add_mating_data.py"
 ENV_PATH="/project/hoskere/jkgao/.conda/envs/athena"
 N_JOBS=2147 # Total number of training jobs to split into
 
@@ -12,7 +12,7 @@ mkdir -p logs
 
 # --- Submit test bag file first ---
 TEST_INPUT="datasets/chessbench/data/test/action_value_data.bag"
-TEST_OUTPUT="datasets/chessbenchmate/data/test/action_value_data.bag"
+TEST_OUTPUT="datasets/chessbenchm/data/test/action_value_data.bag"
 TEST_JOB_SCRIPT="slurm_jobs/job_test_action_value.sh"
 
 mkdir -p "$(dirname "$TEST_OUTPUT")"
