@@ -1,6 +1,6 @@
 import chess
-import numpy as np
 from athena.encoders._base_encoder import BaseEncoder
+import torch
 
 
 class ActionTokenizer(BaseEncoder):
@@ -98,14 +98,15 @@ class ActionTokenizer(BaseEncoder):
         tokens.extend(list(full.rjust(3, ".")))
         assert len(tokens) == 77
         # prepend CLS token to reach 78 as in paper (one special token).
-        ids = [self.cls_id] + [self.char_vocab.get(t, self.pad_id) for t in tokens]
-        assert len(ids) == 78
+        fen_tokens = [self.cls_id] + [
+            self.char_vocab.get(t, self.pad_id) for t in tokens
+        ]
+        assert len(fen_tokens) == 78
 
         # Encode UCI move.
-        move_id = self.uci2idx[uci]
-        ids.append(move_id)
+        move_token = self.uci2idx[uci]
 
-        return ids
+        return fen_tokens, move_token
 
     def decode(self):
         raise NotImplementedError("ActionTokenizer does not support decoding.")

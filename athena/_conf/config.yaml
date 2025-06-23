@@ -1,7 +1,7 @@
 defaults:
-  - architecture: resnet/small
-  - loss_function: cross_entropy
-  - encoder/input_encoder: action
+  - architecture: mamba/small
+  - loss_function: hl_gauss
+  - encoder/input_encoder: action_tokenizer
   - encoder/output_encoder: win_prob
 
 model_version: "2.13"
@@ -9,7 +9,12 @@ description: "Athena model for image classification"
 epochs: 3
 lr: 0.0001 # 0.0001 is a good starting point
 lr_decay_rate: 1
-batch_size: "128"
+batch_size: 128
 val_log_frequency: 33554432
 train_log_frequency: 4096
+max_val_samples: 10000
+max_puzzles: 1000
 device: "auto"
+use_wandb: false
+K: 128
+M: 16

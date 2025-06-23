@@ -6,3 +6,5 @@ width: 1024
 patch_size: 1
 heads: 8
 mlp_ratio: 4.0
+dropout: 0.1
+emb_dropout: 0.1

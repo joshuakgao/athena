@@ -4,4 +4,3 @@ size: large
 depth: 6
 width: 256
 heads: 4
-mlp_ratio: 4.0

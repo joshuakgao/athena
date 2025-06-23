@@ -7,7 +7,7 @@ class CrossEntropyLoss(nn.Module):
     This loss function is commonly used for multi-class classification tasks.
     """
 
-    def __init__(self):
+    def __init__(self, cfg):
         super(CrossEntropyLoss, self).__init__()
         # Initialize the base CrossEntropyLoss from PyTorch
         self.loss_function = nn.CrossEntropyLoss()

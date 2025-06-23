@@ -52,7 +52,7 @@ def get_input_encoder(cfg) -> "BaseEncoder":
     return INPUT_ENCODERS[cfg.encoder.input_encoder.type](cfg)
 
 
-def get_output_encoder(name):
+def get_output_encoder(cfg):
     """
     Retrieve an output encoder class by name.
 
@@ -62,7 +62,7 @@ def get_output_encoder(name):
     Returns:
         class: The output encoder class corresponding to the name.
     """
-    return OUTPUT_ENCODERS.get(name.lower(), None)
+    return OUTPUT_ENCODERS[cfg.encoder.output_encoder.type](cfg)
 
 
 def get_loss_function(cfg):

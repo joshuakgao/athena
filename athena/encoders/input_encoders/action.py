@@ -10,7 +10,7 @@ class ActionEncoder(BaseEncoder):
         ), "ActionEncoder should only be used with action input encoder type."
 
         super().__init__()
-        self.input_channels = cfg.encoder.input_encoder.channels
+        self.input_channels = cfg.encoder.input_encoder.input_channels
 
     def encode(self, fen, move_uci):
         """

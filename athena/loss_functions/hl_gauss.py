@@ -25,8 +25,8 @@ class HLGaussLoss(nn.Module):
         super(HLGaussLoss, self).__init__()
 
         # Get config params
-        self.K = cfg.encoder.K
-        self.M = cfg.encoder.M
+        self.K = cfg.K
+        self.M = cfg.M
         self.output_bins = self.K + 2 * self.M + 1  # Total
         self.sigma = cfg.loss_function.sigma
 

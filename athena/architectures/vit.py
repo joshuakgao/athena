@@ -148,61 +148,62 @@ class AthenaViT(nn.Module):
     Takes 8x8x28 input tensor and outputs win probability distribution.
     """
 
-    def __init__(
-        self,
-        input_channels=28,  # Matches your encoding
-        board_size=8,
-        patch_size=1,  # Using 1x1 patches to preserve all information
-        embed_dim=128,
-        depth=6,
-        n_heads=8,
-        mlp_ratio=4.0,
-        dropout=0.1,
-        emb_dropout=0.1,
-        K=128,  # Number of win probability bins
-        M=16,  # Number of mate bins on each side
-    ):
+    def __init__(self, cfg):
+        assert cfg.architecture.type == "vit", "Expected architecture type to be 'vit'"
+
         super().__init__()
-        self.device = device_selector("auto", label="AthenaViT")
-        self.K = K
-        self.M = M
+
+        # Get config params
+        self.depth = cfg.architecture.depth
+        self.width = cfg.architecture.width
+        self.patch_size = cfg.architecture.patch_size
+        self.heads = cfg.architecture.heads
+        self.mlp_ratio = cfg.architecture.mlp_ratio
+        self.dropout = cfg.architecture.dropout
+        self.emb_dropout = cfg.architecture.emb_dropout
+        self.K = cfg.K
+        self.M = cfg.M
+        self.input_channels = cfg.encoder.input_encoder.input_channels
+        self.board_size = 8
+
+        self.device = device_selector(cfg.device, label="AthenaViT")
         self.output_bins = (
-            K + 2 * M + 1
+            self.K + 2 * self.M + 1
         )  # K for win probs, 2*M for mate-for and mate-against, 1 for checkmate
 
         # Verify patch size divides board size
         assert (
-            board_size % patch_size == 0
+            self.board_size % self.patch_size == 0
         ), "Board size must be divisible by patch size"
 
         # Patch embedding - we'll use 1x1 patches to preserve all spatial info
         self.patch_embed = nn.Conv2d(
-            in_channels=input_channels,
-            out_channels=embed_dim,
-            kernel_size=patch_size,
-            stride=patch_size,
+            in_channels=self.input_channels,
+            out_channels=self.width,
+            kernel_size=self.patch_size,
+            stride=self.patch_size,
         )
 
         # Calculate number of patches
-        self.n_patches = (board_size // patch_size) ** 2
+        self.n_patches = (self.board_size // self.patch_size) ** 2
 
         # Class token and positional embedding
-        self.cls_token = nn.Parameter(torch.zeros(1, 1, embed_dim))
-        self.pos_embed = nn.Parameter(torch.zeros(1, self.n_patches + 1, embed_dim))
-        self.pos_dropout = nn.Dropout(emb_dropout)
+        self.cls_token = nn.Parameter(torch.zeros(1, 1, self.width))
+        self.pos_embed = nn.Parameter(torch.zeros(1, self.n_patches + 1, self.width))
+        self.pos_dropout = nn.Dropout(self.emb_dropout)
 
         # Transformer blocks
         self.blocks = nn.ModuleList(
             [
-                TransformerBlock(embed_dim, n_heads, mlp_ratio, dropout)
-                for _ in range(depth)
+                TransformerBlock(self.width, self.heads, self.mlp_ratio, self.dropout)
+                for _ in range(self.depth)
             ]
         )
 
         # Classification head for win probability bins
-        self.norm = nn.LayerNorm(embed_dim)
+        self.norm = nn.LayerNorm(self.width)
         self.head = nn.Linear(
-            embed_dim, self.output_bins
+            self.width, self.output_bins
         )  # Now matches encode_win_prob dimensions
 
         # Initialize weights

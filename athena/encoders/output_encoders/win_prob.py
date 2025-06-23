@@ -2,7 +2,7 @@ import numpy as np
 
 
 class WinProbEncoder:
-    def __init__(self, K=128, M=16):
+    def __init__(self, cfg):
         """
         Initialize the WinProbEncoder with the number of bins for win probabilities and mates.
 
@@ -11,9 +11,11 @@ class WinProbEncoder:
             M (int): Number of mate bins on each side.
         """
         super().__init__()
-        self.K = K
-        self.M = M
-        self.output_bins = K + 2 * M + 1  # Total output bins including checkmate bin
+        self.K = cfg.K
+        self.M = cfg.M
+        self.output_bins = (
+            self.K + 2 * self.M + 1
+        )  # Total output bins including checkmate bin
 
     def encode(self, win_prob, mate):
         """

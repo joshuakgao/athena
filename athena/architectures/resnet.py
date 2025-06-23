@@ -31,8 +31,8 @@ class AthenaResnet(nn.Module):
         # Get config params
         self.width = cfg.architecture.width
         self.depth = cfg.architecture.depth
-        self.K = cfg.encoder.K
-        self.M = cfg.encoder.M
+        self.K = cfg.K
+        self.M = cfg.M
         self.input_channels = cfg.encoder.input_encoder.input_channels
 
         self.device = device_selector(cfg.device, label="Athena")
