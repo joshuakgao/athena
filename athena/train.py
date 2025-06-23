@@ -1,23 +1,28 @@
-import argparse
 import os
 
 import chess
+import hydra
 import pandas as pd
 import torch
-import torch.nn as nn
 import torch.optim as optim
+
+from datasets.chessbenchmate.dataset import ChessbenchDataset
+from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import wandb
-from loss_functions.hl_gauss import HLGaussLoss
-from architectures.resnet import AthenaResnet
-from architectures.vit import AthenaViT
-from datasets.chessbench.dataset import ChessbenchDataset
+from athena.architectures.resnet import AthenaResnet
+from athena.loss_functions.hl_gauss import HLGaussLoss
+from athena.encoders._base_encoder import BaseEncoder
 from utils.logger import logger
+import pprint as pp
+from athena.module_registry import *
 
 
-def solve_puzzles(model, puzzle_file, device, max_puzzles=1000):
+def solve_puzzles(
+    model, input_encoder: BaseEncoder, puzzle_file, device, max_puzzles=1000
+):
     """
     Evaluate tactical-puzzle accuracy.
 
@@ -65,11 +70,7 @@ def solve_puzzles(model, puzzle_file, device, max_puzzles=1000):
                     for move in legal_moves:
                         feat = (
                             torch.from_numpy(
-                                model.encode_action_value(
-                                    board.fen(),
-                                    move.uci(),
-                                    input_channels=config["input_channels"],
-                                )
+                                input_encoder.encode(board.fen(), move.uci())
                             )
                             .permute(2, 0, 1)
                             .float()
@@ -116,13 +117,20 @@ def custom_collate_fn(batch):
     return list(fens), list(moves), list(win_probs), list(mates)
 
 
-def train_athena(model: AthenaResnet, config):
+def train_athena(cfg):
+    # Init model
+    model = get_model(cfg)
     model.to(model.device)
     logger.info(f"Model parameters: {model.count_parameters() / 1e6:.2f}M")
+    model_name = f"{cfg.model_version}_Athena_{cfg.architecture.type}_{cfg.description}"
+
+    # Init encoders
+    input_encoder = get_input_encoder(cfg)
+    output_encoder = get_output_encoder(cfg)
 
     # Initialize WandB
-    if config["use_wandb"]:
-        wandb.init(project="athena_chess", config=config, name=config["model_name"])
+    if cfg["use_wandb"]:
+        wandb.init(project="athena_chess", config=cfg, name=model_name)
         wandb.watch(model)
 
     # Create datasets
@@ -132,44 +140,39 @@ def train_athena(model: AthenaResnet, config):
     # Create data loaders
     train_loader = DataLoader(
         train_dataset,
-        batch_size=config["batch_size"],
+        batch_size=cfg["batch_size"],
         collate_fn=custom_collate_fn,
     )
     val_loader = DataLoader(
         val_dataset,
-        batch_size=config["batch_size"],
+        batch_size=cfg["batch_size"],
         collate_fn=custom_collate_fn,
     )
 
     # Loss and optimizer
-    criterion = HLGaussLoss(
-        output_bins=model.output_bins,
-        sigma=config["loss_sigma"],  # Use sigma from config
-        device=model.device,
-    )
-
+    criterion = get_loss_function(cfg)
     optimizer = optim.AdamW(
         model.parameters(),
-        lr=config["lr"],
+        lr=cfg.lr,
     )
     scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=1, gamma=config["lr_decay_rate"]
+        optimizer, step_size=1, gamma=cfg.lr_decay_rate
     )
 
-    val_frequency = max(1, config["val_frequency"] // config["batch_size"])
-    train_log_frequency = max(1, config["train_log_frequency"] // config["batch_size"])
+    val_log_frequency = max(1, cfg.val_log_frequency // cfg.batch_size)
+    train_log_frequency = max(1, cfg.train_log_frequency // cfg.batch_size)
 
     # Training loop
     best_puzzle_accuracy = float("-inf")
 
-    for epoch in range(config["epochs"]):
+    for epoch in range(cfg["epochs"]):
         model.train()
         train_loss = 0.0
         correct = 0
         total = 0
 
         # Training phase with periodic validation
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{config['epochs']}")
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{cfg.epochs}")
         for batch_idx, (fens, moves, win_probs, mates) in enumerate(pbar):
             # Skip batches with None win probabilities (if any)
             if win_probs[0] is None:
@@ -181,20 +184,14 @@ def train_athena(model: AthenaResnet, config):
             for fen, move, win_prob, mate in zip(fens, moves, win_probs, mates):
                 # Encode FEN
                 fen_tensor = (
-                    torch.from_numpy(
-                        model.encode_action_value(
-                            fen, move, input_channels=INPUT_CHANNELS
-                        )
-                    )
+                    torch.from_numpy(input_encoder.encode(fen, move))
                     .permute(2, 0, 1)
                     .float()
                 )
                 inputs.append(fen_tensor)
 
                 # Encode win probability
-                target = torch.from_numpy(
-                    model.encode_win_prob(win_prob, mate, K=K, M=M)
-                ).float()
+                target = torch.from_numpy(output_encoder.encode(win_prob, mate)).float()
                 targets.append(target)
 
             inputs = torch.stack(inputs).to(model.device)
@@ -230,7 +227,7 @@ def train_athena(model: AthenaResnet, config):
                 }
             )
 
-            if config["use_wandb"] and batch_idx % train_log_frequency == 0:
+            if cfg["use_wandb"] and batch_idx % train_log_frequency == 0:
                 # Log training metrics to WandB
                 wandb.log(
                     {
@@ -242,7 +239,7 @@ def train_athena(model: AthenaResnet, config):
                 )
 
             # Perform validation at regular intervals
-            if batch_idx % val_frequency == 0:
+            if batch_idx % cfg.val_log_frequency == 0:
                 model.eval()
                 val_loss = 0.0
                 val_correct = 0
@@ -257,7 +254,7 @@ def train_athena(model: AthenaResnet, config):
                     ) in tqdm(
                         enumerate(val_loader), total=len(val_loader), desc="Validating"
                     ):
-                        if val_batch_idx * config["batch_size"] > 10_000:
+                        if val_batch_idx * cfg["batch_size"] > 10_000:
                             break
 
                         if val_win_probs[0] is None:
@@ -269,18 +266,14 @@ def train_athena(model: AthenaResnet, config):
                             val_fens, val_moves, val_win_probs, val_mates
                         ):
                             fen_tensor = (
-                                torch.from_numpy(
-                                    model.encode_action_value(
-                                        fen, move, input_channels=INPUT_CHANNELS
-                                    )
-                                )
+                                torch.from_numpy(input_encoder.encode(fen, move))
                                 .permute(2, 0, 1)
                                 .float()
                             )
                             val_inputs.append(fen_tensor)
 
                             target = torch.from_numpy(
-                                model.encode_win_prob(win_prob, mate, K=K, M=M)
+                                output_encoder.encode(win_prob, mate)
                             ).float()
                             val_targets.append(target)
 
@@ -309,7 +302,7 @@ def train_athena(model: AthenaResnet, config):
                 )
 
                 # Log metrics to WandB
-                if config["use_wandb"]:
+                if cfg["use_wandb"]:
                     wandb.log(
                         {
                             "val_loss": avg_val_loss,
@@ -322,9 +315,9 @@ def train_athena(model: AthenaResnet, config):
                 if puzzle_accuracy > best_puzzle_accuracy:
                     best_puzzle_accuracy = puzzle_accuracy
                     os.makedirs("checkpoints", exist_ok=True)
-                    model_path = f"checkpoints/{config['model_name']}.pt"
+                    model_path = f"checkpoints/{cfg['model_name']}.pt"
                     torch.save(model.state_dict(), model_path)
-                    if config["use_wandb"]:
+                    if cfg["use_wandb"]:
                         wandb.save(model_path)
                     logger.info(
                         f"New best model saved with puzzle_accuracy: {puzzle_accuracy:.4f}"
@@ -336,126 +329,16 @@ def train_athena(model: AthenaResnet, config):
     # Cleanup
     train_dataset.close()
     val_dataset.close()
-    if config["use_wandb"]:
+    if cfg["use_wandb"]:
         wandb.finish()
+
+
+@hydra.main(version_base=None, config_path="_conf", config_name="config")
+def main(cfg: DictConfig):
+    logger.info(OmegaConf.to_yaml(cfg))
+    train_athena(cfg)
 
 
 # Example usage:
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train Athena model.")
-    parser.add_argument(
-        "--model_arch",
-        type=str,
-        default="resnet",
-        choices=["resnet", "transformer", "vit"],
-        help="Model architecture to train",
-    )
-    parser.add_argument(
-        "--size",
-        type=str,
-        default="small",
-        help="Size of the model (small, medium, large)",
-    )
-    args = parser.parse_args()
-    model_arch = args.model_arch
-
-    assert model_arch in [
-        "resnet",
-        "transformer",
-        "vit",
-    ], f"Invalid model architecture: {model_arch}"
-
-    if model_arch == "resnet":
-        config = {
-            "model_name": "2.11_Athena_Resnet19_K=128_M=16_lr=0.0001_loss=hl_gauss",
-            "description": "Added hl_gauss loss for chess value modeling.",
-            "epochs": 3,
-            "lr": 0.0001,
-            "lr_decay_rate": 1,
-            "batch_size": 4096,
-            "use_wandb": True,
-            "K": 128,  # num bins for win probability histogram
-            "M": 16,  # num bins for mating histogram
-            "input_channels": 24,  # Number of input channels (planes)
-            "loss_sigma": 1,  # Standard deviation for Gaussian smoothing in HLGaussLoss
-            # logs config
-            "val_frequency": 2**25,
-            "train_log_frequency": 4096,
-            # model config
-            "num_blocks": 19,
-            "width": 256,
-        }
-        model = AthenaResnet(
-            input_channels=config["input_channels"],
-            width=config["width"],
-            num_blocks=config["num_blocks"],
-            K=config["K"],
-            M=config["M"],
-        )
-    elif model_arch == "vit":
-        if args.size == "small":
-            config = {
-                "model_name": "2.12_AthenaViT_small_K=128_M=16_lr=0.0001_loss=hlgauss0.0",
-                "description": "Small Vision Transformer for chess value modeling.",
-                "epochs": 3,
-                "lr": 0.0001,
-                "lr_decay_rate": 1,
-                "batch_size": 128,
-                "use_wandb": True,
-                "K": 128,
-                "M": 16,
-                "input_channels": 24,
-                "loss_sigma": 1,  # Standard deviation for Gaussian smoothing in HLGaussLoss
-                # logs config
-                "val_frequency": 2**25,
-                "train_log_frequency": 4096,
-                # ViT-specific
-                "embed_dim": 256,
-                "patch_size": 1,
-                "depth": 30,
-                "n_heads": 4,
-                "mlp_ratio": 4.0,
-            }
-
-        elif args.size == "large":
-            config = {
-                "model_name": "2.12_AthenaViT_large_K=128_M=16_lr=0.0001_loss=hl_gauss1.0",
-                "description": "Vision Transformer for chess value modeling.",
-                "epochs": 3,
-                "lr": 0.0001,
-                "lr_decay_rate": 1,
-                "batch_size": 128,
-                "use_wandb": False,
-                "K": 128,
-                "M": 16,
-                "input_channels": 24,
-                "loss_sigma": 1,  # Standard deviation for Gaussian smoothing in HLGaussLoss
-                # logs config
-                "val_frequency": 2**25,
-                "train_log_frequency": 4096,
-                # ViT-specific
-                "embed_dim": 1024,
-                "patch_size": 1,
-                "depth": 11,
-                "n_heads": 8,
-                "mlp_ratio": 4.0,
-            }
-
-        model = AthenaViT(
-            input_channels=config["input_channels"],
-            patch_size=config["patch_size"],
-            embed_dim=config["embed_dim"],
-            depth=config["depth"],
-            n_heads=config["n_heads"],
-            mlp_ratio=config["mlp_ratio"],
-            K=config["K"],
-            M=config["M"],
-        )
-
-    K = config["K"]
-    M = config["M"]
-    INPUT_CHANNELS = config["input_channels"]
-
-    logger.info(config)
-    # Start training
-    train_athena(model, config)
+    main()

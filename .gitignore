@@ -9,3 +9,4 @@ nohup.out
 selfplay.pgn
 slurm_jobs/
 *.tar.gz
+outputs/

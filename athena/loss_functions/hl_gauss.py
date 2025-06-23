@@ -1,6 +1,7 @@
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+from utils.device_selector import device_selector
 
 
 class HLGaussLoss(nn.Module):
@@ -9,7 +10,7 @@ class HLGaussLoss(nn.Module):
     and a Gaussian-smoothed target distribution.
     """
 
-    def __init__(self, output_bins, sigma=1.0, device="cpu"):
+    def __init__(self, cfg):
         """
         Args:
             output_bins (int): The total number of output bins in the model.
@@ -17,10 +18,20 @@ class HLGaussLoss(nn.Module):
                            A smaller sigma creates a sharper peak.
             device (str): The device to run the calculations on ('cpu' or 'cuda').
         """
+        assert (
+            cfg.loss_function.type == "hl_gauss"
+        ), "Expected loss function type to be 'hl_gauss'"
+        ""
         super(HLGaussLoss, self).__init__()
-        self.output_bins = output_bins
-        self.sigma = sigma
-        self.device = device
+
+        # Get config params
+        self.K = cfg.encoder.K
+        self.M = cfg.encoder.M
+        self.output_bins = self.K + 2 * self.M + 1  # Total
+        self.sigma = cfg.loss_function.sigma
+
+        self.device = device_selector(cfg.device, label="Athena")
+
         # Pre-compute a tensor of bin indices [0, 1, 2, ...]
         self.bins = torch.arange(self.output_bins, device=self.device).float()
 

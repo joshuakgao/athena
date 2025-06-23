@@ -1,0 +1,7 @@
+type: transformer
+size: large
+
+depth: 8
+width: 1024
+heads: 8
+mlp_ratio: 4.0

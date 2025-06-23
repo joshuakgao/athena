@@ -1,0 +1,5 @@
+defaults:
+  input_encoder: action
+  output_encoder: win_prob
+  K: 128 # Number of win probability bins
+  M: 16 # Number of mate bins

@@ -1,0 +1,8 @@
+type: vit
+size: large
+
+depth: 11
+width: 1024
+patch_size: 1
+heads: 8
+mlp_ratio: 4.0

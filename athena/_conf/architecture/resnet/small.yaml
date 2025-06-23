@@ -1,0 +1,5 @@
+type: resnet
+size: small
+
+depth: 19
+width: 256

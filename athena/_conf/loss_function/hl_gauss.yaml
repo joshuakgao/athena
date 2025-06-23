@@ -1,0 +1,2 @@
+type: hl_gauss
+sigma: 0.1 # Standard deviation for the Gaussian distribution
