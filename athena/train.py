@@ -144,7 +144,11 @@ def train_athena(cfg):
 
     # Initialize WandB
     if cfg["use_wandb"]:
-        wandb.init(project="athena_chess", config=cfg, name=model_name)
+        wandb.init(
+            project="athena_chess",
+            config=OmegaConf.to_container(cfg, resolve=True),
+            name=model_name,
+        )
         wandb.watch(model)
 
     # Create datasets

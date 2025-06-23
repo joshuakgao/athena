@@ -1,11 +1,12 @@
 defaults:
   - architecture: mamba/small
-  - loss_function: hl_gauss
+  - loss_function: cross_entropy
   - encoder/input_encoder: action_tokenizer
   - encoder/output_encoder: win_prob
 
-model_version: "2.13"
-description: "Athena model for image classification"
+use_wandb: true
+model_version: "2.14"
+description: "Mamba small model test"
 epochs: 3
 lr: 0.0001 # 0.0001 is a good starting point
 lr_decay_rate: 1
@@ -15,6 +16,5 @@ train_log_frequency: 4096
 max_val_samples: 10000
 max_puzzles: 1000
 device: "auto"
-use_wandb: false
 K: 128
 M: 16
