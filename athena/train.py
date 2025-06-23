@@ -5,19 +5,15 @@ import hydra
 import pandas as pd
 import torch
 import torch.optim as optim
-
-from datasets.chessbenchmate.dataset import ChessbenchDataset
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
 import wandb
-from athena.architectures.resnet import AthenaResnet
-from athena.loss_functions.hl_gauss import HLGaussLoss
 from athena.encoders._base_encoder import BaseEncoder
-from utils.logger import logger
-import pprint as pp
 from athena.module_registry import *
+from datasets.chessbenchmate.dataset import ChessbenchDataset
+from utils.logger import logger
 
 
 def solve_puzzles(

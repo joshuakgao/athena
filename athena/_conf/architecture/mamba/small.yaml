@@ -1,8 +1,8 @@
 type: mamba
 size: small
 
-depth: 20
 width: 1024
+depth: 20
 d_state: 16
 d_conv: 4
 expand: 2

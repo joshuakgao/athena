@@ -2,8 +2,8 @@ import numpy as np
 import torch
 import torch.nn as nn
 from mamba_ssm.modules.mamba_simple import Mamba
-
-from utils.device_selector import device_selector  # unchanged
+from athena.encoders.input_encoders.action_tokenizer import ActionTokenizer
+from utils.device_selector import device_selector
 
 # ---------------------------------------------------------
 # 1. A single Mamba block (post-norm, residual)
@@ -56,46 +56,49 @@ class AthenaMamba(nn.Module):
         K, M       – identical meaning to your Transformer version
     """
 
-    def __init__(
-        self,
-        *,
-        dim: int = 256,
-        depth: int = 8,
-        d_state: int = 16,
-        d_conv: int = 4,
-        expand: int = 2,
-        K: int = 128,
-        M: int = 32,
-    ):
+    def __init__(self, cfg):
+        assert cfg.architecture.type == "mamba", "Expected Mamba architecture"
+
         super().__init__()
+
+        # Get configuration parameters
+        self.action_tokenizer = ActionTokenizer(cfg)
+        self.width = cfg.architecture.width
+        self.depth = cfg.architecture.depth
+        self.d_state = cfg.architecture.d_state
+        self.d_conv = cfg.architecture.d_conv
+        self.expand = cfg.architecture.expand
+        self.K = cfg.K
+        self.M = cfg.M
+
         self.device = device_selector(label="AthenaMamba")
 
         # --- embeddings ----------------------------------------------------
-        self.token_emb = nn.Embedding(vocab_size, dim)
-        self.action_emb = nn.Embedding(len(UCI_MOVES), dim)
+        self.token_emb = nn.Embedding(self.action_tokenizer.vocab_size, self.width)
+        self.action_emb = nn.Embedding(len(self.action_tokenizer.uci_moves), self.width)
 
         # Positional information
         # Mamba can work *without* explicit positions, but absolute
         # embeddings still help on short fixed-length inputs.
-        self.pos_emb = nn.Embedding(80, dim)  # 77 + action + CLS buffer
+        self.pos_emb = nn.Embedding(80, self.width)  # 77 + action + CLS buffer
 
         # --- stack of Mamba layers -----------------------------------------
         self.layers = nn.ModuleList(
             [
                 MambaLayer(
-                    dim,
-                    d_state=d_state,
-                    d_conv=d_conv,
-                    expand=expand,
+                    self.width,
+                    d_state=self.d_state,
+                    d_conv=self.d_conv,
+                    expand=self.expand,
                 )
-                for _ in range(depth)
+                for _ in range(self.depth)
             ]
         )
 
         # --- projection head -----------------------------------------------
-        self.norm = nn.LayerNorm(dim)
-        self.output_bins = K + 2 * M + 1
-        self.head = nn.Linear(dim, self.output_bins)
+        self.norm = nn.LayerNorm(self.width)
+        self.output_bins = self.K + 2 * self.M + 1
+        self.head = nn.Linear(self.width, self.output_bins)
 
     # ----------------------------------------------------------------------
     def forward(self, fen_tokens: torch.LongTensor, action_idx: torch.LongTensor):
