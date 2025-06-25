@@ -93,7 +93,7 @@ def solve_puzzles(
                             )
                             outputs = model(fen_tokens, move_token)
                         elif cfg.encoder.input_encoder.type == "action":
-                            outputs = model(torch.stack(inputs))
+                            outputs = model(torch.stack(inputs).to(model.device))
 
                     # Find the move with the largest output bin index
                     bin_indices = outputs.argmax(dim=1)
@@ -238,7 +238,7 @@ def train_athena(cfg):
                 )
                 outputs = model(fen_tokens, move_token)
             elif cfg.encoder.input_encoder.type == "action":
-                outputs = model(torch.stack(inputs))
+                outputs = model(torch.stack(inputs).to(model.device))
 
             # Calculate loss
             loss = criterion(outputs, targets)
@@ -344,7 +344,9 @@ def train_athena(cfg):
                             )
                             val_outputs = model(fen_tokens, move_token)
                         elif cfg.encoder.input_encoder.type == "action":
-                            val_outputs = model(torch.stack(val_inputs))
+                            val_outputs = model(
+                                torch.stack(val_inputs).to(model.device)
+                            )
 
                         loss = criterion(val_outputs, val_targets)
 

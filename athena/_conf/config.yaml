@@ -1,12 +1,12 @@
 defaults:
-  - architecture: mamba/small
+  - architecture: vit/small
   - loss_function: cross_entropy
-  - encoder/input_encoder: action_tokenizer
+  - encoder/input_encoder: action
   - encoder/output_encoder: win_prob
 
 use_wandb: true
-model_version: "2.14"
-description: "Mamba small model test"
+model_version: "2.15"
+description: "Full ViT small experiment"
 epochs: 3
 lr: 0.0001 # 0.0001 is a good starting point
 lr_decay_rate: 1
