@@ -278,7 +278,7 @@ def train_athena(cfg):
                 )
 
             # Perform validation at regular intervals
-            if batch_idx % cfg.val_log_frequency == 0:
+            if batch_idx % val_log_frequency == 0:
                 model.eval()
                 val_loss = 0.0
                 val_correct = 0
