@@ -4,8 +4,8 @@ from typing import Dict, List, Optional, Tuple
 
 from torch.utils.data import Dataset
 
-from datasets.chessbenchmate.utils import constants
-from datasets.chessbenchmate.utils.bagz import BagReader
+from athena.datasets.chessbenchmate.utils import constants
+from athena.datasets.chessbenchmate.utils.bagz import BagReader
 
 
 class ChessbenchDataset(Dataset):
@@ -90,7 +90,7 @@ class ChessbenchDataset(Dataset):
 
 if __name__ == "__main__":
     # Example usage
-    dataset = ChessbenchDataset(dir="datasets/chessbenchmate/data", mode="test")
+    dataset = ChessbenchDataset(dir="src/athena/datasets/chessbenchmate/data", mode="test")
     print(f"Total records: {len(dataset)}")
     print(f"Number of bags: {dataset.num_bags}")
 

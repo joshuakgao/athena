@@ -1,0 +1,23 @@
+[project]
+name = "athena"
+version = "0.1.0"
+description = "Add your description here"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "apache-beam>=2.67.0",
+    "chess>=1.11.2",
+    "numpy>=2.2.6",
+    "pandas>=2.3.2",
+    "pytest>=8.4.1",
+    "torch>=2.8.0",
+    "tqdm>=4.67.1",
+    "wandb>=0.21.3",
+]
+
+[project.scripts]
+athena = "athena:main"
+
+[build-system]
+requires = ["uv_build>=0.8.14,<0.9.0"]
+build-backend = "uv_build"

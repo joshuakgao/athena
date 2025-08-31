@@ -17,8 +17,8 @@ import chess
 import chess.engine
 from tqdm import tqdm
 
-from datasets.chessbenchmate.utils.bagz import BagReader, BagWriter
-from datasets.chessbenchmate.utils.constants import CODERS
+from athena.datasets.chessbenchmate.utils.bagz import BagReader, BagWriter
+from athena.datasets.chessbenchmate.utils.constants import CODERS
 
 ENGINE_PATH = "models/stockfish"
 ENGINE_LIMIT = chess.engine.Limit(time=0.05)
