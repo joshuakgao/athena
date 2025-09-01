@@ -10,3 +10,5 @@ selfplay.pgn
 slurm_jobs/
 *.tar.gz
 outputs/
+src/athena/datasets/chessbench/data
+src/athena/datasets/chessbenchmate/data
