@@ -6,7 +6,7 @@ import torch.nn as nn
 from mamba_ssm.modules.mamba_simple import Mamba
 
 from athena.encoders.input_encoders.action_tokenizer import ActionTokenizer
-from utils.device_selector import device_selector
+from athena.utils.device_selector import device_selector
 
 
 class MambaLayer(nn.Module):

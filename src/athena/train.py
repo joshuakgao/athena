@@ -7,11 +7,11 @@ import hydra
 import pandas as pd
 import torch
 import torch.optim as optim
-import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+import wandb
 from athena.datasets.chessbenchmate.dataset import ChessbenchDataset
 from athena.encoders._base_encoder import BaseEncoder
 from athena.module_registry import (
@@ -20,7 +20,7 @@ from athena.module_registry import (
     get_model,
     get_output_encoder,
 )
-from utils.logger import logger
+from athena.utils.logger import logger
 
 
 def solve_puzzles(cfg, model, input_encoder: BaseEncoder, puzzle_file, device, max_puzzles=1000):
@@ -152,8 +152,8 @@ def train_athena(cfg):
         wandb.watch(model)
 
     # Create datasets
-    train_dataset = ChessbenchDataset("datasets/chessbenchmate/data", mode="train")
-    val_dataset = ChessbenchDataset("datasets/chessbenchmate/data", mode="test")
+    train_dataset = ChessbenchDataset("src/athena/datasets/chessbenchmate/data", mode="train")
+    val_dataset = ChessbenchDataset("src/athena/datasets/chessbenchmate/data", mode="test")
 
     # Create data loaders
     train_loader = DataLoader(
@@ -346,7 +346,7 @@ def train_athena(cfg):
                     cfg,
                     model,
                     input_encoder,
-                    "datasets/chessbench/data/puzzles.csv",
+                    "src/athena/datasets/chessbenchmate/data/puzzles.csv",
                     model.device,
                     max_puzzles=cfg.max_puzzles,
                 )
@@ -364,8 +364,8 @@ def train_athena(cfg):
                 # Save best model
                 if puzzle_accuracy > best_puzzle_accuracy:
                     best_puzzle_accuracy = puzzle_accuracy
-                    os.makedirs("athena/checkpoints", exist_ok=True)
-                    model_path = f"athena/checkpoints/{model_name}.pt"
+                    os.makedirs("src/athena/checkpoints", exist_ok=True)
+                    model_path = f"src/athena/checkpoints/{model_name}.pt"
                     torch.save(model.state_dict(), model_path)
                     if cfg.use_wandb:
                         wandb.save(model_path)

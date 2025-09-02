@@ -99,7 +99,7 @@ class ChessbenchDataset(Dataset):
 
 if __name__ == "__main__":
     # Example usage
-    dataset = ChessbenchDataset(dir="src/athena/datasets/chessbenchmate/data", mode="test")
+    dataset = ChessbenchDataset(dir="src/athena/datasets/chessbenchmate/data", mode="train")
     print(f"Total records: {len(dataset)}")
     print(f"Number of bags: {dataset.num_bags}")
 

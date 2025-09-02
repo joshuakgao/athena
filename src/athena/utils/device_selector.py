@@ -1,7 +1,6 @@
 """Util function for device selector."""
 
 import torch
-
 from utils.logger import logger
 
 

@@ -87,7 +87,6 @@ dependencies = [
     { name = "ruff" },
     { name = "sphinx" },
     { name = "sphinx-rtd-theme" },
-    { name = "torch" },
     { name = "tqdm" },
     { name = "wandb" },
 ]
@@ -109,7 +108,6 @@ requires-dist = [
     { name = "ruff", specifier = ">=0.12.11" },
     { name = "sphinx", specifier = ">=8.2.3" },
     { name = "sphinx-rtd-theme", specifier = ">=3.0.2" },
-    { name = "torch", specifier = ">=2.8.0" },
     { name = "tqdm", specifier = ">=4.67.1" },
     { name = "wandb", specifier = ">=0.21.3" },
 ]
