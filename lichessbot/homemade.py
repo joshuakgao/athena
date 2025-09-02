@@ -1,7 +1,5 @@
 import logging
-import os
 import random
-import sys
 from collections import defaultdict
 
 import chess
@@ -10,8 +8,8 @@ from chess.engine import Limit, PlayResult
 from lib.engine_wrapper import MinimalEngine
 from lib.lichess_types import MOVE
 
-from architecture import Athena
-from embeddings import encode_action_value
+from athena.architecture import Athena
+from athena.embeddings import encode_action_value
 
 logger = logging.getLogger(__name__)
 
@@ -49,9 +47,7 @@ class AthenaEngine(MinimalEngine):
 
         Randomly choose among top 5 if it's the first move of the game.
         """
-        legal_moves = (
-            root_moves if isinstance(root_moves, list) else list(board.legal_moves)
-        )
+        legal_moves = root_moves if isinstance(root_moves, list) else list(board.legal_moves)
         if not legal_moves:
             return PlayResult(None, None)
 

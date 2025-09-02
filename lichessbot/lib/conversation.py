@@ -1,11 +1,14 @@
 """Allows lichess-bot to send messages to the chat."""
+
 import logging
+from collections.abc import Sequence
+
 from lib import model
 from lib.engine_wrapper import EngineWrapper
 from lib.lichess import Lichess
 from lib.lichess_types import GameEventType
-from collections.abc import Sequence
 from lib.timer import seconds
+
 MULTIPROCESSING_LIST_TYPE = Sequence[model.Challenge]
 
 logger = logging.getLogger(__name__)
@@ -27,8 +30,14 @@ class ChatLine:
 class Conversation:
     """Enables the bot to communicate with its opponent and the spectators."""
 
-    def __init__(self, game: model.Game, engine: EngineWrapper, li: Lichess, version: str,
-                 challenge_queue: MULTIPROCESSING_LIST_TYPE) -> None:
+    def __init__(
+        self,
+        game: model.Game,
+        engine: EngineWrapper,
+        li: Lichess,
+        version: str,
+        challenge_queue: MULTIPROCESSING_LIST_TYPE,
+    ) -> None:
         """
         Communication between lichess-bot and the game chats.
 
@@ -68,15 +77,20 @@ class Conversation:
         from_self = line.username == self.game.username
         is_eval = cmd.startswith("eval")
         if cmd in ("commands", "help"):
-            self.send_reply(line,
-                            "Supported commands: !wait (wait a minute for my first move), !name, "
-                            "!eval (or any text starting with !eval), !queue")
+            self.send_reply(
+                line,
+                "Supported commands: !wait (wait a minute for my first move), !name, "
+                "!eval (or any text starting with !eval), !queue",
+            )
         elif cmd == "wait" and self.game.is_abortable():
             self.game.ping(seconds(60), seconds(120), seconds(120))
             self.send_reply(line, "Waiting 60 seconds...")
         elif cmd == "name":
             name = self.game.me.name
-            self.send_reply(line, f"{name} running {self.engine.name()} (lichess-bot v{self.version})")
+            self.send_reply(
+                line,
+                f"{name} running {self.engine.name()} (lichess-bot v{self.version})",
+            )
         elif is_eval and (from_self or line.room == "spectator"):
             stats = self.engine.get_stats(for_chat=True)
             self.send_reply(line, ", ".join(stats))
@@ -84,7 +98,9 @@ class Conversation:
             self.send_reply(line, "I don't tell that to my opponent, sorry.")
         elif cmd == "queue":
             if self.challengers:
-                challengers = ", ".join([f"@{challenger.challenger.name}" for challenger in reversed(self.challengers)])
+                challengers = ", ".join(
+                    [f"@{challenger.challenger.name}" for challenger in reversed(self.challengers)]
+                )
                 self.send_reply(line, f"Challenge queue: {challengers}")
             else:
                 self.send_reply(line, "No challenges queued.")

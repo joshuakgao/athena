@@ -1,37 +1,44 @@
+"""Module for tokenizing a fen board position and a uci move."""
+
 import chess
+
 from athena.encoders._base_encoder import BaseEncoder
-import torch
 
 
 class ActionTokenizer(BaseEncoder):
+    """Tokenizer for FEN board positions and UCI moves."""
+
     def __init__(self, cfg):
-        assert (
-            cfg.encoder.input_encoder.type == "action_tokenizer"
-        ), "Expected ActionTokenizer input encoder type."
+        """Initialize the ActionTokenizer with the given configuration.
+
+        Args:
+            cfg (Config): Configuration object containing encoder settings.
+        """
+        assert cfg.encoder.input_encoder.type == "action_tokenizer", (
+            "Expected ActionTokenizer input encoder type."
+        )
 
         super().__init__()
 
         # Character vocabulary for FEN components.
         _PIECE_CHARS = "prnbqkPRNBQK."  # 13 symbols (lower & upper pieces + empty)
-        _OTHER_CHARS = "wbKQkq\u2013-abcdefgh12345678"  # side-to-move, castling, en-passant files, digits
+        _OTHER_CHARS = (
+            "wbKQkq\u2013-abcdefgh12345678"  # side-to-move, castling, en-passant files, digits
+        )
         _HALF_FULL_DIGITS = "0123456789."
 
         # Build mapping. We keep it small (<=128) so we can fit positional + token ids in single embedding.
         # CLS token added at id 0. All other tokens shifted by +1.
         self.char_vocab = {
             c: i + 1
-            for i, c in enumerate(
-                sorted(set(_PIECE_CHARS + _OTHER_CHARS + _HALF_FULL_DIGITS))
-            )
+            for i, c in enumerate(sorted(set(_PIECE_CHARS + _OTHER_CHARS + _HALF_FULL_DIGITS)))
         }
         self.cls_id = 0
         self.pad_id = len(self.char_vocab) + 1
         self.vocab_size = self.pad_id + 1
 
         self.uci_moves = self._generate_uci()
-        assert (
-            len(self.uci_moves) == 1968
-        ), f"Expected 1968 UCI moves, got {len(self.uci_moves)}"
+        assert len(self.uci_moves) == 1968, f"Expected 1968 UCI moves, got {len(self.uci_moves)}"
         self.uci2idx = {m: i for i, m in enumerate(self.uci_moves)}
 
     def _generate_uci(self) -> list[str]:
@@ -44,17 +51,13 @@ class ActionTokenizer(BaseEncoder):
             # Queen moves (covers rook/bishop/queen)
             board.set_piece_at(square, chess.Piece.from_symbol("Q"))
             for next_square in board.attacks(square):
-                all_moves.append(
-                    chess.square_name(square) + chess.square_name(next_square)
-                )
+                all_moves.append(chess.square_name(square) + chess.square_name(next_square))
             board.remove_piece_at(square)
 
             # Knight moves
             board.set_piece_at(square, chess.Piece.from_symbol("N"))
             for next_square in board.attacks(square):
-                all_moves.append(
-                    chess.square_name(square) + chess.square_name(next_square)
-                )
+                all_moves.append(chess.square_name(square) + chess.square_name(next_square))
             board.remove_piece_at(square)
 
         # Generate promotions (normal and capture)
@@ -98,9 +101,7 @@ class ActionTokenizer(BaseEncoder):
         tokens.extend(list(full.rjust(3, ".")))
         assert len(tokens) == 77
         # prepend CLS token to reach 78 as in paper (one special token).
-        fen_tokens = [self.cls_id] + [
-            self.char_vocab.get(t, self.pad_id) for t in tokens
-        ]
+        fen_tokens = [self.cls_id] + [self.char_vocab.get(t, self.pad_id) for t in tokens]
         assert len(fen_tokens) == 78
 
         # Encode UCI move.
@@ -108,5 +109,6 @@ class ActionTokenizer(BaseEncoder):
 
         return fen_tokens, move_token
 
-    def decode(self):
+    def decode(self, fen_tokens, move_token):
+        """Decode a pair of FEN tokens and UCI move into a FEN string."""
         raise NotImplementedError("ActionTokenizer does not support decoding.")

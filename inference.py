@@ -1,10 +1,12 @@
-import chess
-import random
-import torch
-import chess.pgn
-from datetime import datetime
-from collections import defaultdict
+"""Test the Athena model by play games against it or against itself."""
 
+import random
+from collections import defaultdict
+from datetime import datetime
+
+import chess
+import chess.pgn
+import torch
 from architecture import Athena
 from embeddings import encode_action_value
 
@@ -20,9 +22,7 @@ def select_model_move(
     position_counts,
     top_n: int | None = None,
 ):
-    """
-    Score all legal moves with the model, optionally sample uniformly
-    from the `top_n` highest-ranked non-repetition moves.
+    """Score all legal moves with the model, optionally sample uniformly from the `top_n` highest-ranked non-repetition moves.
 
     If `top_n` is None, the single best move is returned (original behaviour).
     """
@@ -37,9 +37,9 @@ def select_model_move(
     meta = []  # (move, would_repeat)
     for mv in legal_moves:
         encoded_batch.append(
-            torch.from_numpy(
-                encode_action_value(board.fen(), mv.uci(), input_channels)
-            ).permute(2, 0, 1)
+            torch.from_numpy(encode_action_value(board.fen(), mv.uci(), input_channels)).permute(
+                2, 0, 1
+            )
         )
         test_board = board.copy(stack=False)
         test_board.push(mv)
@@ -82,6 +82,7 @@ def select_model_move(
 # Human vs. Athena
 # ────────────────────────────────────────────────────────────────────────────────
 def play_user_vs_model(model, device, input_channels, max_explore_moves=2):
+    """Play a game of chess between a human user and the Athena model."""
     board = chess.Board()
     position_counts = defaultdict(int)
 
@@ -160,6 +161,7 @@ def play_user_vs_model(model, device, input_channels, max_explore_moves=2):
 # Self-play
 # ────────────────────────────────────────────────────────────────────────────────
 def self_play(model, device, input_channels, max_explore_moves=2, save_pgn=True):
+    """Have athena play itself."""
     model.eval()
     board = chess.Board()
     position_counts = defaultdict(int)
@@ -205,9 +207,7 @@ def self_play(model, device, input_channels, max_explore_moves=2, save_pgn=True)
 # Entrypoint
 # ────────────────────────────────────────────────────────────────────────────────
 if __name__ == "__main__":
-    model = Athena(
-        input_channels=24, num_blocks=19, width=256, K=128, M=16, device="cpu"
-    )
+    model = Athena(input_channels=24, num_blocks=19, width=256, K=128, M=16, device="cpu")
     model.load_state_dict(
         torch.load(
             "checkpoints/2.08_Athena_Resnet19_K=128_M=16_lr=0.0001.pt",

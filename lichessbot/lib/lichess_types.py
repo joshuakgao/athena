@@ -1,11 +1,13 @@
 """Some type hints that can be accessed by all other python files."""
-from typing import Any, Callable, Optional, Union, TypedDict, Literal
-from chess.engine import PovWdl, PovScore, PlayResult, Limit, Opponent
-from chess import Move, Board
-from queue import Queue
+
 import logging
 from enum import Enum
+from queue import Queue
 from types import TracebackType
+from typing import Any, Callable, Literal, Optional, TypedDict, Union
+
+from chess import Board, Move
+from chess.engine import Limit, Opponent, PlayResult, PovScore, PovWdl
 
 COMMANDS_TYPE = list[str]
 MOVE = Union[PlayResult, list[Move]]
@@ -112,12 +114,42 @@ class InfoStrDict(TypedDict, total=False):
     Pv: str
 
 
-InfoDictKeys = Literal["score", "pv", "depth", "seldepth", "time", "nodes", "nps", "tbhits", "multipv", "currmove",
-                       "currmovenumber", "hashfull", "cpuload", "refutation", "currline", "ebf", "wdl", "string",
-                       "ponderpv", "Source", "Pv"]
+InfoDictKeys = Literal[
+    "score",
+    "pv",
+    "depth",
+    "seldepth",
+    "time",
+    "nodes",
+    "nps",
+    "tbhits",
+    "multipv",
+    "currmove",
+    "currmovenumber",
+    "hashfull",
+    "cpuload",
+    "refutation",
+    "currline",
+    "ebf",
+    "wdl",
+    "string",
+    "ponderpv",
+    "Source",
+    "Pv",
+]
 
 
-InfoDictValue = Union[PovScore, list[Move], int, float, str, Move, dict[Move, list[Move]], dict[int, list[Move]], PovWdl]
+InfoDictValue = Union[
+    PovScore,
+    list[Move],
+    int,
+    float,
+    str,
+    Move,
+    dict[Move, list[Move]],
+    dict[int, list[Move]],
+    PovWdl,
+]
 
 
 class PlayerType(TypedDict, total=False):
@@ -455,5 +487,15 @@ class BackoffDetails(_BackoffDetails, total=False):
     value: Any  # present in the on_predicate decorator case
 
 
-ENGINE_INPUT_ARGS_TYPE = Union[None, OPTIONS_TYPE, type[BaseException], BaseException, TracebackType, Board, Limit, str, bool]
+ENGINE_INPUT_ARGS_TYPE = Union[
+    None,
+    OPTIONS_TYPE,
+    type[BaseException],
+    BaseException,
+    TracebackType,
+    Board,
+    Limit,
+    str,
+    bool,
+]
 ENGINE_INPUT_KWARGS_TYPE = Union[None, int, bool, list[Move], Opponent]

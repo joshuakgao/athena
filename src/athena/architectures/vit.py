@@ -1,3 +1,5 @@
+"""Module used to implement ViT architecture."""
+
 import math
 
 import chess
@@ -10,11 +12,10 @@ from utils.device_selector import device_selector
 
 
 class PatchEmbedding(nn.Module):
-    """
-    Split image into patches and embed them.
-    """
+    """Split image into patches and embed them."""
 
     def __init__(self, img_size=224, patch_size=16, in_channels=3, embed_dim=768):
+        """Init PatchEmbedding."""
         super().__init__()
         self.img_size = img_size
         self.patch_size = patch_size
@@ -28,7 +29,8 @@ class PatchEmbedding(nn.Module):
         )  # This conv layer will both split into patches and do the embedding
 
     def forward(self, x):
-        """
+        """Forward function for PatchEmbedding.
+
         Input shape: (batch_size, channels, height, width)
         Output shape: (batch_size, n_patches, embed_dim)
         """
@@ -39,19 +41,18 @@ class PatchEmbedding(nn.Module):
 
 
 class MultiHeadSelfAttention(nn.Module):
-    """
-    Multi-head self attention mechanism.
-    """
+    """Multi-head self attention mechanism."""
 
     def __init__(self, embed_dim=768, n_heads=12, dropout=0.1):
+        """Initialize the MultiHeadSelfAttention module."""
         super().__init__()
         self.embed_dim = embed_dim
         self.n_heads = n_heads
         self.head_dim = embed_dim // n_heads
 
-        assert (
-            self.head_dim * n_heads == embed_dim
-        ), "Embedding dimension needs to be divisible by number of heads"
+        assert self.head_dim * n_heads == embed_dim, (
+            "Embedding dimension needs to be divisible by number of heads"
+        )
 
         self.qkv = nn.Linear(embed_dim, embed_dim * 3)  # For queries, keys, values
         self.attn_dropout = nn.Dropout(dropout)
@@ -59,7 +60,8 @@ class MultiHeadSelfAttention(nn.Module):
         self.proj_dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask=None):
-        """
+        """Forward function for MultiHeadSelfAttention.
+
         Input shape: (batch_size, n_patches + 1, embed_dim)
         Output shape: (batch_size, n_patches + 1, embed_dim)
         """
@@ -93,13 +95,10 @@ class MultiHeadSelfAttention(nn.Module):
 
 
 class MLP(nn.Module):
-    """
-    Simple MLP with GELU activation and dropout.
-    """
+    """Simple MLP with GELU activation and dropout."""
 
-    def __init__(
-        self, in_features, hidden_features=None, out_features=None, dropout=0.1
-    ):
+    def __init__(self, in_features, hidden_features=None, out_features=None, dropout=0.1):
+        """Initialize the MLP."""
         super().__init__()
         out_features = out_features or in_features
         hidden_features = hidden_features or in_features
@@ -110,6 +109,7 @@ class MLP(nn.Module):
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x):
+        """Forward pass for the MLP."""
         x = self.fc1(x)
         x = self.act(x)
         x = self.dropout(x)
@@ -119,11 +119,17 @@ class MLP(nn.Module):
 
 
 class TransformerBlock(nn.Module):
-    """
-    Transformer block with layer normalization, multi-head attention, and MLP.
-    """
+    """Transformer block with layer normalization, multi-head attention, and MLP."""
 
     def __init__(self, embed_dim=768, n_heads=12, mlp_ratio=4.0, dropout=0.1):
+        """Initializes a Transformer-style encoder block with multi-head self-attention and a feed-forward MLP.
+
+        Args:
+            embed_dim (int, optional): Dimension of input embeddings. Default is 768.
+            n_heads (int, optional): Number of attention heads. Default is 12.
+            mlp_ratio (float, optional): Expansion factor for the hidden layer in the MLP. Default is 4.0.
+            dropout (float, optional): Dropout probability applied after attention and MLP layers. Default is 0.1.
+        """
         super().__init__()
         self.norm1 = nn.LayerNorm(embed_dim)
         self.attn = MultiHeadSelfAttention(embed_dim, n_heads, dropout)
@@ -135,6 +141,7 @@ class TransformerBlock(nn.Module):
         )
 
     def forward(self, x):
+        """Forward pass for the Transformer block."""
         # Attention with residual connection
         x = x + self.attn(self.norm1(x))
         # MLP with residual connection
@@ -143,12 +150,13 @@ class TransformerBlock(nn.Module):
 
 
 class AthenaViT(nn.Module):
-    """
-    Vision Transformer adapted for chess position evaluation.
+    """Vision Transformer adapted for chess position evaluation.
+
     Takes 8x8x28 input tensor and outputs win probability distribution.
     """
 
     def __init__(self, cfg):
+        """Initialize the Vision Transformer."""
         assert cfg.architecture.type == "vit", "Expected architecture type to be 'vit'"
 
         super().__init__()
@@ -172,9 +180,7 @@ class AthenaViT(nn.Module):
         )  # K for win probs, 2*M for mate-for and mate-against, 1 for checkmate
 
         # Verify patch size divides board size
-        assert (
-            self.board_size % self.patch_size == 0
-        ), "Board size must be divisible by patch size"
+        assert self.board_size % self.patch_size == 0, "Board size must be divisible by patch size"
 
         # Patch embedding - we'll use 1x1 patches to preserve all spatial info
         self.patch_embed = nn.Conv2d(
@@ -221,7 +227,8 @@ class AthenaViT(nn.Module):
             nn.init.ones_(m.weight)
 
     def forward(self, x):
-        """
+        """Forward function for the Vision Transformer.
+
         Input shape: (batch_size, channels, height, width)
         Output shape: (batch_size, output_bins)
         """
@@ -253,12 +260,12 @@ class AthenaViT(nn.Module):
         return win_prob_logits
 
     def encode_action_value(self, fen, move_uci, input_channels=24):
-        """
-        Convert a FEN and move into an AlphaZero-style input tensor with move encoding.
+        """Convert a FEN and move into an AlphaZero-style input tensor with move encoding.
 
         Args:
             fen (str): The FEN string representing the chess position.
             move_uci (str): The UCI string representing the move to be made.
+            input_channels (int): The number of input channels for the tensor.
 
         Returns:
             np.ndarray: A 8x8xN tensor where:
@@ -283,7 +290,7 @@ class AthenaViT(nn.Module):
         castling_part = parts[2]
         en_passant_part = parts[3]
         halfmove_part = int(parts[4])
-        fullmove_part = int(parts[5])
+        # fullmove_part = int(parts[5])
 
         # Piece encoding (planes 0-11)
         piece_to_plane = {
@@ -363,8 +370,8 @@ class AthenaViT(nn.Module):
         return board_tensor
 
     def encode_win_prob(self, win_prob, mate, K=128, M=20):
-        """
-        Encode win probability and mate information into a tensor with K + 2*M + 1 bins.
+        """Encode win probability and mate information into a tensor with K + 2*M + 1 bins.
+
         We need the extra bin for the move that checkmates the opponent.
         This extra bin isn't shown on the negative side of the tensor, since a move that checkmates yourself is illegal.
         Bin structure:
@@ -406,5 +413,5 @@ class AthenaViT(nn.Module):
         return tensor
 
     def count_parameters(self):
-        """Returns the number of parameters in the model"""
+        """Returns the number of parameters in the model."""
         return sum(p.numel() for p in self.parameters() if p.requires_grad)

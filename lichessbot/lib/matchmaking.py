@@ -1,17 +1,18 @@
 """Challenge other bots."""
 
-import random
-import logging
-import datetime
 import contextlib
-from lib import model
-from lib.timer import Timer, seconds, minutes, days, years
+import datetime
+import logging
+import random
 from collections import defaultdict
 from collections.abc import Sequence
-from lib.lichess import Lichess
-from lib.config import Configuration
 from typing import Optional, Union
-from lib.lichess_types import UserProfileType, PerfType, EventType, FilterType
+
+from lib import model
+from lib.config import Configuration
+from lib.lichess import Lichess
+from lib.lichess_types import EventType, FilterType, PerfType, UserProfileType
+from lib.timer import Timer, days, minutes, seconds, years
 
 MULTIPROCESSING_LIST_TYPE = Sequence[model.Challenge]
 DAILY_TIMERS_TYPE = list[Timer]
@@ -28,9 +29,7 @@ def read_daily_challenges() -> DAILY_TIMERS_TYPE:
     try:
         with open(daily_challenges_file_name) as file:
             for line in file:
-                timers.append(
-                    Timer(days(1), datetime.datetime.strptime(line, timestamp_format))
-                )
+                timers.append(Timer(days(1), datetime.datetime.strptime(line, timestamp_format)))
     except FileNotFoundError:
         pass
 
@@ -47,9 +46,7 @@ def write_daily_challenges(daily_challenges: DAILY_TIMERS_TYPE) -> None:
 class Matchmaking:
     """Challenge other bots."""
 
-    def __init__(
-        self, li: Lichess, config: Configuration, user_profile: UserProfileType
-    ) -> None:
+    def __init__(self, li: Lichess, config: Configuration, user_profile: UserProfileType) -> None:
         """Initialize values needed for matchmaking."""
         self.li = li
         self.variants = list(
@@ -60,18 +57,12 @@ class Matchmaking:
         self.last_challenge_created_delay = Timer(
             seconds(25)
         )  # Challenges expire after 20 seconds.
-        self.last_game_ended_delay = Timer(
-            minutes(self.matchmaking_cfg.challenge_timeout)
-        )
+        self.last_game_ended_delay = Timer(minutes(self.matchmaking_cfg.challenge_timeout))
         self.last_user_profile_update_time = Timer(minutes(5))
-        self.min_wait_time = seconds(
-            60
-        )  # Wait before new challenge to avoid api rate limits.
+        self.min_wait_time = seconds(60)  # Wait before new challenge to avoid api rate limits.
 
         # Maximum time between challenges, even if there are active games
-        self.max_wait_time = (
-            minutes(10) if self.matchmaking_cfg.allow_during_games else years(10)
-        )
+        self.max_wait_time = minutes(10) if self.matchmaking_cfg.allow_during_games else years(10)
         self.challenge_id = ""
         self.daily_challenges = read_daily_challenges()
 
@@ -81,8 +72,8 @@ class Matchmaking:
         #   - variant (standard, horde, etc.)
         #   - casual/rated
         #   - empty string (if no other reason is given or self.filter_type is COARSE)
-        self.challenge_type_acceptable: defaultdict[tuple[str, str], bool] = (
-            defaultdict(lambda: True)
+        self.challenge_type_acceptable: defaultdict[tuple[str, str], bool] = defaultdict(
+            lambda: True
         )
         self.challenge_filter = self.matchmaking_cfg.challenge_filter
 
@@ -93,9 +84,7 @@ class Matchmaking:
         """Whether we should create a challenge."""
         matchmaking_enabled = self.matchmaking_cfg.allow_matchmaking
         time_has_passed = self.last_game_ended_delay.is_expired()
-        challenge_expired = (
-            self.last_challenge_created_delay.is_expired() and self.challenge_id
-        )
+        challenge_expired = self.last_challenge_created_delay.is_expired() and self.challenge_id
         min_wait_time_passed = (
             self.last_challenge_created_delay.time_since_reset() > self.min_wait_time
         )
@@ -105,9 +94,7 @@ class Matchmaking:
             self.discard_challenge(self.challenge_id)
             self.show_earliest_challenge_time()
         return bool(
-            matchmaking_enabled
-            and (time_has_passed or challenge_expired)
-            and min_wait_time_passed
+            matchmaking_enabled and (time_has_passed or challenge_expired) and min_wait_time_passed
         )
 
     def create_challenge(
@@ -163,9 +150,7 @@ class Matchmaking:
         100 - 149 challenges --> 3 minutes
         etc.
         """
-        self.daily_challenges = [
-            timer for timer in self.daily_challenges if not timer.is_expired()
-        ]
+        self.daily_challenges = [timer for timer in self.daily_challenges if not timer.is_expired()]
         self.daily_challenges.append(Timer(days(1)))
         self.min_wait_time = seconds(60) * ((len(self.daily_challenges) // 50) + 1)
         write_daily_challenges(self.daily_challenges)
@@ -204,15 +189,11 @@ class Matchmaking:
 
         if rating_preference == "high":
             # A bot with max_rating rating will be twice as likely to get picked than a bot with min_rating rating.
-            reduce_ratings_by = min(
-                min_rating - (max_rating - min_rating), min_rating - 1
-            )
+            reduce_ratings_by = min(min_rating - (max_rating - min_rating), min_rating - 1)
             weights = [rating(bot) - reduce_ratings_by for bot in online_bots]
         elif rating_preference == "low":
             # A bot with min_rating rating will be twice as likely to get picked than a bot with max_rating rating.
-            reduce_ratings_by = max(
-                max_rating - (min_rating - max_rating), max_rating + 1
-            )
+            reduce_ratings_by = max(max_rating - (min_rating - max_rating), max_rating + 1)
             weights = [reduce_ratings_by - rating(bot) for bot in online_bots]
         else:
             weights = [1] * len(online_bots)
@@ -221,9 +202,7 @@ class Matchmaking:
     def choose_opponent(self) -> tuple[Optional[str], int, int, int, str, str]:
         """Choose an opponent."""
         override_choice = random.choice(self.matchmaking_cfg.overrides.keys() + [None])
-        logger.info(
-            f"Using the {override_choice or 'default'} matchmaking configuration."
-        )
+        logger.info(f"Using the {override_choice or 'default'} matchmaking configuration.")
         override = (
             {}
             if override_choice is None
@@ -231,12 +210,8 @@ class Matchmaking:
         )
         match_config = self.matchmaking_cfg | override
 
-        variant = self.get_random_config_value(
-            match_config, "challenge_variant", self.variants
-        )
-        mode = self.get_random_config_value(
-            match_config, "challenge_mode", ["casual", "rated"]
-        )
+        variant = self.get_random_config_value(match_config, "challenge_variant", self.variants)
+        mode = self.get_random_config_value(match_config, "challenge_mode", ["casual", "rated"])
         rating_preference = match_config.rating_preference
 
         base_time = random.choice(match_config.challenge_initial_time)
@@ -281,15 +256,8 @@ class Matchmaking:
         online_bots = list(filter(is_suitable_opponent, online_bots))
 
         def ready_for_challenge(bot: UserProfileType) -> bool:
-            aspects = (
-                [variant, game_type, mode]
-                if self.challenge_filter == FilterType.FINE
-                else []
-            )
-            return all(
-                self.should_accept_challenge(bot["username"], aspect)
-                for aspect in aspects
-            )
+            aspects = [variant, game_type, mode] if self.challenge_filter == FilterType.FINE else []
+            return all(self.should_accept_challenge(bot["username"], aspect) for aspect in aspects)
 
         ready_bots = list(filter(ready_for_challenge, online_bots))
         online_bots = ready_bots or online_bots
@@ -341,8 +309,7 @@ class Matchmaking:
             game_count >= max_games_for_matchmaking
             or (
                 game_count > 0
-                and self.last_challenge_created_delay.time_since_reset()
-                < self.max_wait_time
+                and self.last_challenge_created_delay.time_since_reset() < self.max_wait_time
             )
             or not self.should_create_challenge()
         ):
@@ -353,9 +320,7 @@ class Matchmaking:
         bot_username, base_time, increment, days, variant, mode = self.choose_opponent()
         logger.info(f"Will challenge {bot_username} for a {variant} game.")
         challenge_id = (
-            self.create_challenge(
-                bot_username, base_time, increment, days, variant, mode
-            )
+            self.create_challenge(bot_username, base_time, increment, days, variant, mode)
             if bot_username
             else ""
         )
@@ -381,8 +346,7 @@ class Matchmaking:
         if self.matchmaking_cfg.allow_matchmaking:
             postgame_timeout = self.last_game_ended_delay.time_until_expiration()
             time_to_next_challenge = (
-                self.min_wait_time
-                - self.last_challenge_created_delay.time_since_reset()
+                self.min_wait_time - self.last_challenge_created_delay.time_since_reset()
             )
             time_left = max(postgame_timeout, time_to_next_challenge)
             earliest_challenge_time = datetime.datetime.now() + time_left
@@ -461,15 +425,10 @@ class Matchmaking:
         if reason_key not in decline_details:
             logger.warning(f"Unknown decline reason received: {reason_key}")
         game_problem = (
-            decline_details.get(reason_key, "")
-            if self.challenge_filter == FilterType.FINE
-            else ""
+            decline_details.get(reason_key, "") if self.challenge_filter == FilterType.FINE else ""
         )
         self.add_challenge_filter(opponent.name, game_problem)
-        logger.info(
-            f"Will not challenge {opponent} to another {game_problem}".strip()
-            + " game."
-        )
+        logger.info(f"Will not challenge {opponent} to another {game_problem}".strip() + " game.")
 
         self.show_earliest_challenge_time()
 

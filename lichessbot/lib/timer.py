@@ -59,8 +59,7 @@ zero_seconds = seconds(0)
 
 
 class Timer:
-    """
-    A timer for use in lichess-bot. An instance of timer can be used both as a countdown timer and a stopwatch.
+    """A timer for use in lichess-bot. An instance of timer can be used both as a countdown timer and a stopwatch.
 
     If the duration argument in the __init__() method is greater than zero, then
     the method is_expired() indicates when the intial duration has passed. The
@@ -72,10 +71,12 @@ class Timer:
     the timer was created or since it was last reset.
     """
 
-    def __init__(self, duration: timedelta = zero_seconds,
-                 backdated_timestamp: Optional[datetime] = None) -> None:
-        """
-        Start the timer.
+    def __init__(
+        self,
+        duration: timedelta = zero_seconds,
+        backdated_timestamp: Optional[datetime] = None,
+    ) -> None:
+        """Start the timer.
 
         :param duration: The duration of time before Timer.is_expired() returns True.
         :param backdated_timestamp: When the timer should have started. Used to keep the timers between sessions.

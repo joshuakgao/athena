@@ -1,9 +1,10 @@
+"""Module for registering and retrieving components used in the Athena architecture."""
+
 from athena.architectures import AthenaMamba, AthenaResnet, AthenaTransformer, AthenaViT
 from athena.encoders._base_encoder import BaseEncoder
 from athena.encoders.input_encoders import ActionEncoder, ActionTokenizer
 from athena.encoders.output_encoders import WinProbEncoder
 from athena.loss_functions import CrossEntropyLoss, HLGaussLoss
-
 
 ARCHITECTURES = {
     "mamba": AthenaMamba,
@@ -28,11 +29,11 @@ LOSS_FUNCTIONS = {
 
 
 def get_model(cfg):
-    """
-    Retrieve a model class based on the configuration.
+    """Retrieve a model class based on the configuration.
 
     Args:
         cfg (Config): Configuration object containing model settings.
+
     Returns:
         nn.Module: An instance of the model class specified in the configuration.
     """
@@ -40,8 +41,7 @@ def get_model(cfg):
 
 
 def get_input_encoder(cfg) -> "BaseEncoder":
-    """
-    Retrieve an input encoder class based on the configuration.
+    """Retrieve an input encoder class based on the configuration.
 
     Args:
         cfg (Config): Configuration object containing encoder settings.
@@ -53,21 +53,19 @@ def get_input_encoder(cfg) -> "BaseEncoder":
 
 
 def get_output_encoder(cfg):
-    """
-    Retrieve an output encoder class by name.
+    """Retrieve an output encoder class by name.
 
     Args:
-        name (str): The name of the output encoder.
+        cfg (Config): Configuration object containing encoder settings.
 
     Returns:
-        class: The output encoder class corresponding to the name.
+        BaseEncoder: An instance of the output encoder class specified in the configuration.
     """
     return OUTPUT_ENCODERS[cfg.encoder.output_encoder.type](cfg)
 
 
 def get_loss_function(cfg):
-    """
-    Retrieve a loss function class based on the configuration.
+    """Retrieve a loss function class based on the configuration.
 
     Args:
         cfg (Config): Configuration object containing loss function settings.

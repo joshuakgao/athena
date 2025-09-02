@@ -1,3 +1,5 @@
+"""Script used to train Athena to play Chess."""
+
 import os
 
 import chess
@@ -5,22 +7,24 @@ import hydra
 import pandas as pd
 import torch
 import torch.optim as optim
+import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-import wandb
+from athena.datasets.chessbenchmate.dataset import ChessbenchDataset
 from athena.encoders._base_encoder import BaseEncoder
-from athena.module_registry import *
-from datasets.chessbenchmate.dataset import ChessbenchDataset
+from athena.module_registry import (
+    get_input_encoder,
+    get_loss_function,
+    get_model,
+    get_output_encoder,
+)
 from utils.logger import logger
 
 
-def solve_puzzles(
-    cfg, model, input_encoder: BaseEncoder, puzzle_file, device, max_puzzles=1000
-):
-    """
-    Evaluate tactical-puzzle accuracy.
+def solve_puzzles(cfg, model, input_encoder: BaseEncoder, puzzle_file, device, max_puzzles=1000):
+    """Evaluate tactical-puzzle accuracy.
 
     • The CSV’s FEN is the position *before* the opponent’s first move.
     • If the model delivers checkmate in one at any point, the puzzle is
@@ -36,9 +40,7 @@ def solve_puzzles(
     correct, total = 0, 0
 
     with torch.no_grad():
-        for _, row in tqdm(
-            puzzles.iterrows(), desc="Solving puzzles", total=len(puzzles)
-        ):
+        for _, row in tqdm(puzzles.iterrows(), desc="Solving puzzles", total=len(puzzles)):
             if _ == max_puzzles:
                 break
 
@@ -66,16 +68,12 @@ def solve_puzzles(
                     for move in legal_moves:
                         if cfg.encoder.input_encoder.type == "action_tokenizer":
                             # ActionTokenizer encoding
-                            fen_tokens, move_token = input_encoder.encode(
-                                board.fen(), move.uci()
-                            )
+                            fen_tokens, move_token = input_encoder.encode(board.fen(), move.uci())
                             input_encoding = (fen_tokens, move_token)
                         elif cfg.encoder.input_encoder.type == "action":
                             # Action encoding
                             input_encoding = (
-                                torch.from_numpy(
-                                    input_encoder.encode(board.fen(), move.uci())
-                                )
+                                torch.from_numpy(input_encoder.encode(board.fen(), move.uci()))
                                 .permute(2, 0, 1)
                                 .float()
                             )
@@ -127,11 +125,13 @@ def solve_puzzles(
 
 
 def custom_collate_fn(batch):
+    """Used to collate batch data."""
     fens, moves, win_probs, mates = zip(*batch)
     return list(fens), list(moves), list(win_probs), list(mates)
 
 
 def train_athena(cfg):
+    """Main entry point for training."""
     # Init model
     model = get_model(cfg)
     model.to(model.device)
@@ -173,9 +173,7 @@ def train_athena(cfg):
         model.parameters(),
         lr=cfg.lr,
     )
-    scheduler = torch.optim.lr_scheduler.StepLR(
-        optimizer, step_size=1, gamma=cfg.lr_decay_rate
-    )
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=cfg.lr_decay_rate)
 
     val_log_frequency = max(1, cfg.val_log_frequency // cfg.batch_size)
     train_log_frequency = max(1, cfg.train_log_frequency // cfg.batch_size)
@@ -190,7 +188,7 @@ def train_athena(cfg):
         total = 0
 
         # Training phase with periodic validation
-        pbar = tqdm(train_loader, desc=f"Epoch {epoch+1}/{cfg.epochs}")
+        pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{cfg.epochs}")
         for batch_idx, (fens, moves, win_probs, mates) in enumerate(pbar):
             # Skip batches with None win probabilities (if any)
             if win_probs[0] is None:
@@ -209,9 +207,7 @@ def train_athena(cfg):
                 elif cfg.encoder.input_encoder.type == "action":
                     # Action encoding
                     input_encoding = (
-                        torch.from_numpy(input_encoder.encode(fen, move))
-                        .permute(2, 0, 1)
-                        .float()
+                        torch.from_numpy(input_encoder.encode(fen, move)).permute(2, 0, 1).float()
                     )
                 inputs.append(input_encoding)
 
@@ -230,12 +226,8 @@ def train_athena(cfg):
             # Prepare model inputs based on encoder type
             if cfg.encoder.input_encoder.type == "action_tokenizer":
                 # Unzip the (fen_tokens, move_token) tuples
-                fen_tokens = torch.stack(
-                    [torch.tensor(x[0]).to(model.device) for x in inputs]
-                )
-                move_token = torch.stack(
-                    [torch.tensor(x[1]).to(model.device) for x in inputs]
-                )
+                fen_tokens = torch.stack([torch.tensor(x[0]).to(model.device) for x in inputs])
+                move_token = torch.stack([torch.tensor(x[1]).to(model.device) for x in inputs])
                 outputs = model(fen_tokens, move_token)
             elif cfg.encoder.input_encoder.type == "action":
                 outputs = model(torch.stack(inputs).to(model.device))
@@ -290,9 +282,7 @@ def train_athena(cfg):
                         val_moves,
                         val_win_probs,
                         val_mates,
-                    ) in tqdm(
-                        enumerate(val_loader), total=len(val_loader), desc="Validating"
-                    ):
+                    ) in tqdm(enumerate(val_loader), total=len(val_loader), desc="Validating"):
                         if val_batch_idx * cfg.batch_size > cfg.max_val_samples:
                             break
 
@@ -331,22 +321,14 @@ def train_athena(cfg):
                         if cfg.encoder.input_encoder.type == "action_tokenizer":
                             # Unzip the (fen_tokens, move_token) tuples
                             fen_tokens = torch.stack(
-                                [
-                                    torch.tensor(x[0]).to(model.device)
-                                    for x in val_inputs
-                                ]
+                                [torch.tensor(x[0]).to(model.device) for x in val_inputs]
                             )
                             move_token = torch.stack(
-                                [
-                                    torch.tensor(x[1]).to(model.device)
-                                    for x in val_inputs
-                                ]
+                                [torch.tensor(x[1]).to(model.device) for x in val_inputs]
                             )
                             val_outputs = model(fen_tokens, move_token)
                         elif cfg.encoder.input_encoder.type == "action":
-                            val_outputs = model(
-                                torch.stack(val_inputs).to(model.device)
-                            )
+                            val_outputs = model(torch.stack(val_inputs).to(model.device))
 
                         loss = criterion(val_outputs, val_targets)
 
@@ -387,9 +369,7 @@ def train_athena(cfg):
                     torch.save(model.state_dict(), model_path)
                     if cfg.use_wandb:
                         wandb.save(model_path)
-                    logger.info(
-                        f"New best model saved with puzzle_accuracy: {puzzle_accuracy:.4f}"
-                    )
+                    logger.info(f"New best model saved with puzzle_accuracy: {puzzle_accuracy:.4f}")
 
                 model.train()
         scheduler.step()
@@ -403,6 +383,7 @@ def train_athena(cfg):
 
 @hydra.main(version_base=None, config_path="_conf", config_name="config")
 def main(cfg: DictConfig):
+    """Main function."""
     logger.info(OmegaConf.to_yaml(cfg))
     train_athena(cfg)
 

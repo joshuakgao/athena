@@ -1,20 +1,29 @@
+"""Encodes a fen and uci move into a AlphaZero-style input tensor."""
+
 import chess
 import numpy as np
+
 from athena.encoders._base_encoder import BaseEncoder
 
 
 class ActionEncoder(BaseEncoder):
+    """Encodes a fen and uci move into a AlphaZero-style input tensor."""
+
     def __init__(self, cfg):
-        assert (
-            cfg.encoder.input_encoder.type == "action"
-        ), "ActionEncoder should only be used with action input encoder type."
+        """Initialize the ActionEncoder with the given configuration.
+
+        Args:
+            cfg (Config): Configuration object containing encoder settings.
+        """
+        assert cfg.encoder.input_encoder.type == "action", (
+            "ActionEncoder should only be used with action input encoder type."
+        )
 
         super().__init__()
         self.input_channels = cfg.encoder.input_encoder.input_channels
 
     def encode(self, fen, move_uci):
-        """
-        Convert a FEN and move into an AlphaZero-style input tensor with move encoding.
+        """Convert a FEN and move into an AlphaZero-style input tensor with move encoding.
 
         Args:
             fen (str): The FEN string representing the chess position.
@@ -43,7 +52,7 @@ class ActionEncoder(BaseEncoder):
         castling_part = parts[2]
         en_passant_part = parts[3]
         halfmove_part = int(parts[4])
-        fullmove_part = int(parts[5])
+        # fullmove_part = int(parts[5])
 
         # Piece encoding (planes 0-11)
         piece_to_plane = {
@@ -122,5 +131,6 @@ class ActionEncoder(BaseEncoder):
 
         return board_tensor
 
-    def decode(self):
+    def decode(self, board_tensor):
+        """Decode the board tensor into FEN and UCI move."""
         raise NotImplementedError("ActionEncoder does not support decoding.")

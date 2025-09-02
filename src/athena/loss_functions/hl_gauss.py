@@ -1,27 +1,22 @@
+"""This module implements HLGaussLoss. This loss make it so that even if Athena predicts a target bin not accurately but next to it, it still gets a small loss."""
+
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+
 from utils.device_selector import device_selector
 
 
 class HLGaussLoss(nn.Module):
-    """
-    Calculates the KL Divergence between the model's output distribution
-    and a Gaussian-smoothed target distribution.
-    """
+    """Calculates the KL Divergence between the model's output distribution and a Gaussian-smoothed target distribution."""
 
     def __init__(self, cfg):
-        """
+        """Init function for HLGaussLoss.
+
         Args:
-            output_bins (int): The total number of output bins in the model.
-            sigma (float): The standard deviation for the Gaussian curve.
-                           A smaller sigma creates a sharper peak.
-            device (str): The device to run the calculations on ('cpu' or 'cuda').
+            cfg (Config): Configuration object containing loss function settings.
         """
-        assert (
-            cfg.loss_function.type == "hl_gauss"
-        ), "Expected loss function type to be 'hl_gauss'"
-        ""
+        assert cfg.loss_function.type == "hl_gauss", "Expected loss function type to be 'hl_gauss'"
         super(HLGaussLoss, self).__init__()
 
         # Get config params
@@ -36,7 +31,8 @@ class HLGaussLoss(nn.Module):
         self.bins = torch.arange(self.output_bins, device=self.device).float()
 
     def forward(self, outputs, targets):
-        """
+        """Forward function for HLGaussLoss.
+
         Args:
             outputs (torch.Tensor): The raw logits from the model.
                                     Shape: (batch_size, output_bins)

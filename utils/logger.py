@@ -1,10 +1,15 @@
+"""This is a basic Logger configuration."""
+
 import logging
 import os
 from datetime import datetime
 
 
 class Logger:
+    """Basic Logger."""
+
     def __init__(self, log_dir="logs", log_level=logging.INFO):
+        """Configure Logger."""
         # Ensure the log directory exists
         os.makedirs(log_dir, exist_ok=True)
 
@@ -32,18 +37,23 @@ class Logger:
         self.logger = logging.getLogger()
 
     def info(self, message):
+        """Log an info message."""
         self.logger.info(message)
 
     def warning(self, message):
+        """Log a warning message."""
         self.logger.warning(message)
 
     def error(self, message):
+        """Log an error message."""
         self.logger.error(message)
 
     def debug(self, message):
+        """Log a debug message."""
         self.logger.debug(message)
 
     def critical(self, message):
+        """Log a critical message."""
         self.logger.critical(message)
 
 

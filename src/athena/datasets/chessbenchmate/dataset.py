@@ -1,3 +1,5 @@
+"""Chessbench dataset of records with a fen board position, a uci move, a win probability after the uci move is made, and a checkmate status."""
+
 import bisect
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
@@ -9,8 +11,11 @@ from athena.datasets.chessbenchmate.utils.bagz import BagReader
 
 
 class ChessbenchDataset(Dataset):
+    """Chessbench dataset of records with a fen board position, a uci move, a win probability after the uci move is made, and a checkmate status."""
+
     def __init__(self, dir: str, mode: str = "train"):
-        """
+        """Initialize the ChessbenchDataset.
+
         Args:
             dir: Root directory containing train/test subdirectories
             mode: Either "train" or "test"
@@ -40,10 +45,15 @@ class ChessbenchDataset(Dataset):
             raise ValueError(f"No .bag files found in {self.data_dir}")
 
     def __len__(self):
+        """Returns the total number of records in the dataset."""
         return self._total_length
 
     def __getitem__(self, idx) -> Tuple[str, str, Optional[float]]:
-        """
+        """Gets a record from the dataset.
+
+        Args:
+            idx: The index of the record to retrieve.
+
         Returns:
             tuple: (fen_string, move_uci, win_probability)
                    win_probability will be None for training data
@@ -67,24 +77,23 @@ class ChessbenchDataset(Dataset):
 
         # Get and parse the record
         record = self._open_readers[bag_path][idx_in_bag]
-        fen, move, win_prob, mate = constants.CODERS["action_value_with_mate"].decode(
-            record
-        )
+        fen, move, win_prob, mate = constants.CODERS["action_value_with_mate"].decode(record)
         return fen, move, win_prob, mate
 
     def close(self):
-        """Clean up any open file handles"""
+        """Clean up any open file handles."""
         for reader in self._open_readers.values():
             if hasattr(reader, "close"):
                 reader.close()
         self._open_readers.clear()
 
     def __del__(self):
+        """Destructor for ChessbenchDataset used to release resources."""
         self.close()
 
     @property
     def num_bags(self) -> int:
-        """Return the number of bag files in this dataset"""
+        """Return the number of bag files in this dataset."""
         return len(self.bags)
 
 

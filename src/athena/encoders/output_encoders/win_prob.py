@@ -1,25 +1,25 @@
+"""Module used to encode win probability and mate information into bins."""
+
 import numpy as np
 
 
 class WinProbEncoder:
+    """Encoder for win probability and mate information into bins."""
+
     def __init__(self, cfg):
-        """
-        Initialize the WinProbEncoder with the number of bins for win probabilities and mates.
+        """Initialize the WinProbEncoder with the number of bins for win probabilities and mates.
 
         Args:
-            K (int): Number of win probability bins.
-            M (int): Number of mate bins on each side.
+           cfg (Config): Configuration object containing encoder settings.
         """
         super().__init__()
         self.K = cfg.K
         self.M = cfg.M
-        self.output_bins = (
-            self.K + 2 * self.M + 1
-        )  # Total output bins including checkmate bin
+        self.output_bins = self.K + 2 * self.M + 1  # Total output bins including checkmate bin
 
     def encode(self, win_prob, mate):
-        """
-        Encode win probability and mate information into a tensor with K + 2*M + 1 bins.
+        """Encode win probability and mate information into a tensor with K + 2*M + 1 bins.
+
         We need the extra bin for the move that checkmates the opponent.
         This extra bin isn't shown on the negative side of the tensor, since a move that checkmates yourself is illegal.
         Bin structure:
@@ -61,6 +61,14 @@ class WinProbEncoder:
         return tensor
 
     def decode(self, tensor):
+        """Decode the output tensor into win probability and mate information.
+
+        Args:
+            tensor (np.ndarray): The output tensor to decode.
+
+        Returns:
+            Tuple[float, Union[str, int]]: The decoded win probability and mate information.
+        """
         index = np.argmax(tensor)
 
         if index == self.output_bins - 1:

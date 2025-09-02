@@ -1,6 +1,4 @@
-"""
-Annotate a .bag file that stores (FEN, move, win-probability) triples
-with mate-in-N information produced by Stockfish.
+"""Annotate a .bag file that stores (FEN, move, win-probability) triples with mate-in-N information produced by Stockfish.
 
 Mate labels:
     "#"   – the move itself gives immediate checkmate
@@ -25,6 +23,7 @@ ENGINE_LIMIT = chess.engine.Limit(time=0.05)
 
 
 def annotate_single_record(record: bytes) -> bytes:
+    """Annotate a single record with mate-in-N information."""
     fen, move_str, win_prob = CODERS["action_value"].decode(record)
     board = chess.Board(fen)
     mover = board.turn
@@ -42,14 +41,13 @@ def annotate_single_record(record: bytes) -> bytes:
             if score and score.is_mate():
                 mate_label = score.pov(mover).mate()
 
-    return CODERS["action_value_with_mate"].encode(
-        (fen, move_str, win_prob, mate_label)
-    )
+    return CODERS["action_value_with_mate"].encode((fen, move_str, win_prob, mate_label))
 
 
 def add_mate_annotations(
     input_bag: str, output_bag: str, max_datapoints: int | None = None
 ) -> None:
+    """Annotate a .bag file with mate-in-N information."""
     reader = BagReader(input_bag)
     writer = BagWriter(output_bag)
 
@@ -68,13 +66,10 @@ def add_mate_annotations(
 
 
 def main():
-    parser = argparse.ArgumentParser(
-        description="Annotate a .bag file with mate-in-N information."
-    )
+    """Main entry point to parse command line arguments to add mating data to chessbench."""
+    parser = argparse.ArgumentParser(description="Annotate a .bag file with mate-in-N information.")
     parser.add_argument("--input_bag", required=True, help="Path to input .bag file")
-    parser.add_argument(
-        "--output_bag", required=True, help="Path to output annotated .bag file"
-    )
+    parser.add_argument("--output_bag", required=True, help="Path to output annotated .bag file")
     parser.add_argument(
         "--max_datapoints",
         type=int,
@@ -86,9 +81,7 @@ def main():
     # Ensure output directory exists
     os.makedirs(os.path.dirname(args.output_bag), exist_ok=True)
 
-    add_mate_annotations(
-        args.input_bag, args.output_bag, max_datapoints=args.max_datapoints
-    )
+    add_mate_annotations(args.input_bag, args.output_bag, max_datapoints=args.max_datapoints)
 
 
 if __name__ == "__main__":

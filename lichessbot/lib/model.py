@@ -1,13 +1,16 @@
 """Store information about a challenge, game or player in a class."""
-import math
-from urllib.parse import urljoin
-import logging
+
 import datetime
+import logging
+import math
+from collections import Counter, defaultdict
 from enum import Enum
-from lib.timer import Timer, msec, seconds, sec_str, to_msec, to_seconds, years
+from urllib.parse import urljoin
+
 from lib.config import Configuration
-from collections import defaultdict, Counter
-from lib.lichess_types import UserProfileType, ChallengeType, GameEventType, PlayerType
+from lib.lichess_types import (ChallengeType, GameEventType, PlayerType,
+                               UserProfileType)
+from lib.timer import Timer, msec, sec_str, seconds, to_msec, to_seconds, years
 
 logger = logging.getLogger(__name__)
 
@@ -50,15 +53,19 @@ class Challenge:
         if self.speed not in speeds:
             return False
 
-        require_non_zero_increment = (self.challenger.is_bot
-                                      and self.speed == "bullet"
-                                      and challenge_cfg.bullet_requires_increment)
+        require_non_zero_increment = (
+            self.challenger.is_bot
+            and self.speed == "bullet"
+            and challenge_cfg.bullet_requires_increment
+        )
         increment_min = max(increment_min, 1 if require_non_zero_increment else 0)
 
         if self.base is not None and self.increment is not None:
             # Normal clock game
-            return (increment_min <= self.increment <= increment_max
-                    and base_min <= self.base <= base_max)
+            return (
+                increment_min <= self.increment <= increment_max
+                and base_min <= self.base <= base_max
+            )
         elif self.days is not None:
             # Correspondence game
             return days_min <= self.days <= days_max
@@ -70,16 +77,22 @@ class Challenge:
         """Check whether the mode is supported."""
         return ("rated" if self.rated else "casual") in challenge_cfg.modes
 
-    def is_supported_recent(self, config: Configuration, recent_bot_challenges: defaultdict[str, list[Timer]]) -> bool:
+    def is_supported_recent(
+        self,
+        config: Configuration,
+        recent_bot_challenges: defaultdict[str, list[Timer]],
+    ) -> bool:
         """Check whether we have played a lot of games with this opponent recently. Only used when the opponent is a BOT."""
         # Filter out old challenges
-        recent_bot_challenges[self.challenger.name] = [timer for timer
-                                                       in recent_bot_challenges[self.challenger.name]
-                                                       if not timer.is_expired()]
+        recent_bot_challenges[self.challenger.name] = [
+            timer for timer in recent_bot_challenges[self.challenger.name] if not timer.is_expired()
+        ]
         max_recent_challenges = config.max_recent_bot_challenges
-        return (not self.challenger.is_bot
-                or max_recent_challenges is None
-                or len(recent_bot_challenges[self.challenger.name]) < max_recent_challenges)
+        return (
+            not self.challenger.is_bot
+            or max_recent_challenges is None
+            or len(recent_bot_challenges[self.challenger.name]) < max_recent_challenges
+        )
 
     def decline_due_to(self, requirement_met: bool, decline_reason: str) -> str:
         """
@@ -91,8 +104,12 @@ class Challenge:
         """
         return "" if requirement_met else decline_reason
 
-    def is_supported(self, config: Configuration, recent_bot_challenges: defaultdict[str, list[Timer]],
-                     players_with_active_games: Counter[str]) -> tuple[bool, str]:
+    def is_supported(
+        self,
+        config: Configuration,
+        recent_bot_challenges: defaultdict[str, list[Timer]],
+        players_with_active_games: Counter[str],
+    ) -> tuple[bool, str]:
         """Whether the challenge is supported."""
         try:
             if self.from_self:
@@ -100,18 +117,29 @@ class Challenge:
 
             from extra_game_handlers import is_supported_extra
 
-            allowed_opponents: list[str] = list(filter(None, config.allow_list)) or [self.challenger.name]
-            decline_reason = (self.decline_due_to(config.accept_bot or not self.challenger.is_bot, "noBot")
-                              or self.decline_due_to(not config.only_bot or self.challenger.is_bot, "onlyBot")
-                              or self.decline_due_to(self.is_supported_time_control(config), "timeControl")
-                              or self.decline_due_to(self.is_supported_variant(config), "variant")
-                              or self.decline_due_to(self.is_supported_mode(config), "casual" if self.rated else "rated")
-                              or self.decline_due_to(self.challenger.name not in config.block_list, "generic")
-                              or self.decline_due_to(self.challenger.name in allowed_opponents, "generic")
-                              or self.decline_due_to(self.is_supported_recent(config, recent_bot_challenges), "later")
-                              or self.decline_due_to(players_with_active_games[self.challenger.name]
-                                                     < config.max_simultaneous_games_per_user, "later")
-                              or self.decline_due_to(is_supported_extra(self), "generic"))
+            allowed_opponents: list[str] = list(filter(None, config.allow_list)) or [
+                self.challenger.name
+            ]
+            decline_reason = (
+                self.decline_due_to(config.accept_bot or not self.challenger.is_bot, "noBot")
+                or self.decline_due_to(not config.only_bot or self.challenger.is_bot, "onlyBot")
+                or self.decline_due_to(self.is_supported_time_control(config), "timeControl")
+                or self.decline_due_to(self.is_supported_variant(config), "variant")
+                or self.decline_due_to(
+                    self.is_supported_mode(config), "casual" if self.rated else "rated"
+                )
+                or self.decline_due_to(self.challenger.name not in config.block_list, "generic")
+                or self.decline_due_to(self.challenger.name in allowed_opponents, "generic")
+                or self.decline_due_to(
+                    self.is_supported_recent(config, recent_bot_challenges), "later"
+                )
+                or self.decline_due_to(
+                    players_with_active_games[self.challenger.name]
+                    < config.max_simultaneous_games_per_user,
+                    "later",
+                )
+                or self.decline_due_to(is_supported_extra(self), "generic")
+            )
 
             return not decline_reason, decline_reason
 
@@ -153,7 +181,13 @@ class Termination(str, Enum):
 class Game:
     """Store information about a game."""
 
-    def __init__(self, game_info: GameEventType, username: str, base_url: str, abort_time: datetime.timedelta) -> None:
+    def __init__(
+        self,
+        game_info: GameEventType,
+        username: str,
+        base_url: str,
+        abort_time: datetime.timedelta,
+    ) -> None:
         """:param abort_time: How long to wait before aborting the game."""
         self.username = username
         self.id = game_info["id"]
@@ -175,10 +209,13 @@ class Game:
         self.me = self.white if self.is_white else self.black
         self.opponent = self.black if self.is_white else self.white
         self.base_url = base_url
-        self.game_start = datetime.datetime.fromtimestamp(to_seconds(msec(game_info["createdAt"])),
-                                                          tz=datetime.timezone.utc)
+        self.game_start = datetime.datetime.fromtimestamp(
+            to_seconds(msec(game_info["createdAt"])), tz=datetime.timezone.utc
+        )
         self.abort_time = Timer(abort_time)
-        self.terminate_time = Timer(self.clock_initial + self.clock_increment + abort_time + seconds(60))
+        self.terminate_time = Timer(
+            self.clock_initial + self.clock_increment + abort_time + seconds(60)
+        )
         self.disconnect_time = Timer(seconds(0))
 
     def url(self) -> str:
@@ -206,7 +243,12 @@ class Game:
         # than two moves (one from each player) have been played.
         return " " not in self.state["moves"]
 
-    def ping(self, abort_in: datetime.timedelta, terminate_in: datetime.timedelta, disconnect_in: datetime.timedelta) -> None:
+    def ping(
+        self,
+        abort_in: datetime.timedelta,
+        terminate_in: datetime.timedelta,
+        disconnect_in: datetime.timedelta,
+    ) -> None:
         """
         Tell the bot when to abort, terminate, and disconnect from a game.
 
@@ -239,6 +281,7 @@ class Game:
 
     def result(self) -> str:
         """Get the result of the game."""
+
         class GameEnding(str, Enum):
             WHITE_WINS = "1-0"
             BLACK_WINS = "0-1"
@@ -284,8 +327,8 @@ class Player:
         """Get a string representation of `Player`."""
         if self.aiLevel:
             return self.name
-        rating = f'{self.rating}{"?" if self.provisional else ""}'
-        return f'{self.title or ""} {self.name} ({rating})'.strip()
+        rating = f"{self.rating}{'?' if self.provisional else ''}"
+        return f"{self.title or ''} {self.name} ({rating})".strip()
 
     def __repr__(self) -> str:
         """Get a string representation of `Player`."""

@@ -1,4 +1,5 @@
 """Functions for the user to implement when the config file is not adequate to express bot requirements."""
+
 from lib import model
 from lib.lichess_types import OPTIONS_TYPE
 

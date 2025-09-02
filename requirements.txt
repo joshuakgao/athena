@@ -1,8 +1,0 @@
-chess
-numpy
-torch
-tqdm
-wandb
-pandas
-apache-beam
-pytest

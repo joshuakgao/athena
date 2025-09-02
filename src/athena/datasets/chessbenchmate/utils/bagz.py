@@ -130,6 +130,7 @@ class BagShardReader(Sequence[bytes]):
         return self._accum[-1]
 
     def __getitem__(self, index: int) -> bytes:
+        """Returns a record from the Bagz file."""
         if index < 0:
             index += self._accum[-1]
         if seqn := bisect.bisect_left(self._accum, index + 1):
@@ -223,6 +224,7 @@ class BagWriter:
         self._limits.flush()
 
     def __enter__(self) -> Self:
+        """Enters the runtime context related to this object."""
         return self
 
     def __exit__(self, exc_type, exc_value, traceback) -> None:
@@ -256,19 +258,24 @@ class BagDataSource:
         self._num_records = len(self._reader)
 
     def __len__(self) -> int:
+        """Returns the number of records in the Bagz file."""
         return self._num_records
 
     def __getitem__(self, record_key: SupportsIndex) -> bytes:
+        """Returns a record from the Bagz file."""
         return self._reader[record_key]
 
     def __getstate__(self) -> dict[str, Any]:
+        """Returns the state of the BagDataSource."""
         state = self.__dict__.copy()
         del state["_reader"]
         return state
 
     def __setstate__(self, state) -> None:
+        """Restores the state of the BagDataSource."""
         self.__dict__.update(state)
         self._reader = BagReader(self._path)
 
     def __repr__(self) -> str:
-        return f"BagDataSource(path={self._path!r}"
+        """Returns a string representation of the BagDataSource."""
+        return f"BagDataSource(path={self._path!r})"
