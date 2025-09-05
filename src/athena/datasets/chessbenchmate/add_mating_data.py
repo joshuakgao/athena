@@ -30,7 +30,7 @@ def annotate_single_record(record: bytes) -> bytes:
     move = chess.Move.from_uci(move_str)
     board.push(move)
 
-    mate_label: str | int = "-"
+    mate_label: str | int
 
     if board.is_checkmate():
         mate_label = "#"
@@ -39,7 +39,12 @@ def annotate_single_record(record: bytes) -> bytes:
             info = engine.analyse(board, ENGINE_LIMIT)
             score = info.get("score")
             if score and score.is_mate():
-                mate_label = score.pov(mover).mate()
+                mate = score.pov(mover).mate()
+                mate_label = mate if mate is not None else "-"
+            else:
+                mate_label = "-"
+    else:
+        mate_label = "-"
 
     return CODERS["action_value_with_mate"].encode((fen, move_str, win_prob, mate_label))
 

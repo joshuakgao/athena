@@ -5,11 +5,10 @@ My attempt at a deep learning chess bot.
 ## Quickstart
 
 ```bash
-conda create -n athena python=3.10 -y
-conda activate athena
-bash setup.sh
-
-python -m datasets.aegis.generate # this will take a while
+uv sync
+source .venv/bin/activate
+bash src/athena/datasets/chessbenchmate/download.sh
+python src/athena/train.py
 ```
 
 ## Demo on Lichess
