@@ -1,13 +1,12 @@
 """Module for registering and retrieving components used in the Athena architecture."""
 
-from athena.architectures import AthenaMamba, AthenaResnet, AthenaTransformer, AthenaViT
+from athena.architectures import AthenaResnet, AthenaTransformer, AthenaViT
 from athena.encoders._base_encoder import BaseEncoder
 from athena.encoders.input_encoders import ActionEncoder, ActionTokenizer
 from athena.encoders.output_encoders import WinProbEncoder
 from athena.loss_functions import CrossEntropyLoss, HLGaussLoss
 
 ARCHITECTURES = {
-    "mamba": AthenaMamba,
     "resnet": AthenaResnet,
     "transformer": AthenaTransformer,
     "vit": AthenaViT,

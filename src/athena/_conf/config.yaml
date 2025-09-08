@@ -1,12 +1,12 @@
 defaults:
-  - architecture: vit/small
+  - architecture: vit/large
   - loss_function: cross_entropy
   - encoder/input_encoder: action
   - encoder/output_encoder: win_prob
 
-use_wandb: true
+use_wandb: false
 model_version: "2.15"
-description: "Full ViT small experiment"
+description: "Full ViT large experiment"
 epochs: 3
 lr: 0.0001 # 0.0001 is a good starting point
 lr_decay_rate: 1

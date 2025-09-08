@@ -13,7 +13,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 
 from athena.encoders.input_encoders.action_tokenizer import ActionTokenizer
-from utils.device_selector import device_selector
+from athena.utils.device_selector import device_selector
 
 # ---------------------------------------------------------
 # 2. Transformer model (decoder only, post-norm, SwiGLU)

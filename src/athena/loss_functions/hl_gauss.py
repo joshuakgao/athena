@@ -4,7 +4,7 @@ import torch
 import torch.nn as nn
 import torch.nn.functional as F
 
-from utils.device_selector import device_selector
+from athena.utils.device_selector import device_selector
 
 
 class HLGaussLoss(nn.Module):
