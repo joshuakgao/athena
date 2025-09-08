@@ -7,11 +7,11 @@ import hydra
 import pandas as pd
 import torch
 import torch.optim as optim
-import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+import wandb
 from athena.datasets.chessbenchmate.dataset import ChessbenchDataset
 from athena.encoders._base_encoder import BaseEncoder
 from athena.module_registry import (
@@ -262,7 +262,6 @@ def train_athena(cfg):
                 # Log training metrics to WandB
                 wandb.log(
                     {
-                        "epoch": epoch,
                         "train_loss": avg_loss,
                         "train_accuracy": accuracy,
                         "lr": scheduler.get_last_lr()[0],
