@@ -13,7 +13,7 @@ lr_decay_rate: 1
 batch_size: 256
 val_log_frequency: 33554432
 train_log_frequency: 2097152
-max_val_samples: 10000
+max_val_samples: 100000
 max_puzzles: 10000
 device: "auto"
 K: 128

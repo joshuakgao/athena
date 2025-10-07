@@ -37,7 +37,7 @@ class WinProbEncoder:
         assert 0.0 <= win_prob <= 1.0
 
         tensor = np.zeros((self.K + 2 * self.M + 1,), dtype=np.float32)
-
+        index = 0
         if isinstance(mate, str):
             assert mate in ("#", "-"), f"Unrecognized mate string: {mate}"
             if mate == "#":

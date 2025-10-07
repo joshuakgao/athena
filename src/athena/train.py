@@ -357,6 +357,7 @@ def train_athena(cfg):
                             "val_loss": avg_val_loss,
                             "val_accuracy": val_accuracy,
                             "puzzle_accuracy": puzzle_accuracy,
+                            "epoch": epoch,
                         }
                     )
 
