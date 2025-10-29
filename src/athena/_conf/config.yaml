@@ -1,12 +1,12 @@
 defaults:
-  - architecture: resnet/small
+  - architecture: transformer/large
   - loss_function: cross_entropy
-  - encoder/input_encoder: action
+  - encoder/input_encoder: action_tokenizer
   - encoder/output_encoder: win_prob
 
 use_wandb: true
-model_version: "2.15"
-description: "Full ResNet small run."
+model_version: "2.18"
+description: "Testing M=8 performance."
 epochs: 3
 lr: 0.0001 # 0.0001 is a good starting point
 lr_decay_rate: 1
@@ -17,4 +17,4 @@ max_val_samples: 100000
 max_puzzles: 10000
 device: "auto"
 K: 128
-M: 32
+M: 8
