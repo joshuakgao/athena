@@ -1,0 +1,6 @@
+type: transformer
+size: large
+
+depth: 16
+width: 1024
+heads: 8
