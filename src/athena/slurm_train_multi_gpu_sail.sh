@@ -20,4 +20,9 @@
 # FOR SAIL:
 free -h
 df -h
-python src/athena/train.py
+# Launch multi-GPU training using torchrun
+torchrun \
+    --standalone \
+    --nnodes=1 \
+    --nproc_per_node=2 \
+    src/athena/train_multi_gpu.py
