@@ -1,7 +1,8 @@
 """Util function for device selector."""
 
 import torch
-from utils.logger import logger
+
+from athena.utils.logger import logger
 
 
 def device_selector(device: str = "auto", label=""):

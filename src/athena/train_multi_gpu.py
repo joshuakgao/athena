@@ -8,13 +8,13 @@ import pandas as pd
 import torch
 import torch.distributed as dist
 import torch.optim as optim
+import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch.nn.parallel import DistributedDataParallel as DDP
 from torch.utils.data import DataLoader
 from torch.utils.data.distributed import DistributedSampler
 from tqdm import tqdm
 
-import wandb
 from athena.datasets.chessbenchmate.dataset import ChessbenchDataset
 from athena.encoders._base_encoder import BaseEncoder
 from athena.module_registry import (
