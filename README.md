@@ -7,7 +7,9 @@ My attempt at a deep learning chess bot.
 ```bash
 uv sync
 source .venv/bin/activate
-bash src/athena/datasets/chessbenchmate/download.sh
+cd src/athena/datasets
+hf download joshuakgao/chessbenchmate --repo-type dataset --local-dir . --max-workers 1
+cd ../../..
 python src/athena/train.py
 ```
 
