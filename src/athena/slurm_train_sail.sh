@@ -2,8 +2,8 @@
 #SBATCH -J bash
 #SBATCH -o bash.o%j
 #SBATCH --cpus-per-task=4
-#SBATCH --mem=256GB
-#SBATCH --gpus=2
+#SBATCH --mem=64GB
+#SBATCH --gpus=1
 
 # FOR CARYA:
 # module add Miniforge3/py3.10
@@ -20,4 +20,4 @@
 # FOR SAIL:
 free -h
 df -h
-python src/athena/train.py
+python src/athena/train_fast.py
