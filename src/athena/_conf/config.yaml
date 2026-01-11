@@ -5,12 +5,12 @@ defaults:
   - encoder/output_encoder: win_prob
 
 use_wandb: true
-model_version: "2.24"
-description: "Full large transformer run."
+model_version: "2.25"
+description: "Full large transformer run"
 epochs: 3
 lr: 0.0001 # 0.0001 is a good starting point
 lr_decay_rate: 1
-batch_size: 256
+batch_size: 512
 val_log_frequency: 33554432
 train_log_frequency: 2097152
 max_val_samples: 100000
@@ -18,3 +18,4 @@ max_puzzles: 10000
 device: "auto"
 K: 128
 M: 32
+resume_from_checkpoint: "src/athena/checkpoints/2.25_transformer_Full large transformer run_checkpoint.pt"

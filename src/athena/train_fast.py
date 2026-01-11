@@ -7,12 +7,12 @@ import hydra
 import pandas as pd
 import torch
 import torch.optim as optim
-import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
+import wandb
 from athena.datasets.chessbenchmate.dataset import ChessbenchDataset
 from athena.encoders._base_encoder import BaseEncoder
 from athena.module_registry import (
@@ -123,6 +123,87 @@ def custom_collate_fn(batch):
     return list(fens), list(moves), list(win_probs), list(mates)
 
 
+def load_checkpoint(checkpoint_path, model, optimizer, scheduler, scaler=None):
+    """Load checkpoint and return the starting epoch and best accuracy.
+
+    Args:
+        checkpoint_path: Path to the checkpoint file
+        model: The model to load weights into
+        optimizer: The optimizer to load state into
+        scheduler: The learning rate scheduler to load state into
+        scaler: Optional GradScaler for AMP training
+
+    Returns:
+        tuple: (start_epoch, best_puzzle_accuracy)
+    """
+    if not os.path.exists(checkpoint_path):
+        logger.warning(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
+        return 0, float("-inf")
+
+    logger.info(f"Loading checkpoint from {checkpoint_path}...")
+    checkpoint = torch.load(checkpoint_path, map_location=model.device)
+
+    # Load model state
+    if hasattr(model, "_orig_mod"):
+        # Handle compiled models
+        model._orig_mod.load_state_dict(checkpoint["model_state_dict"])
+    else:
+        model.load_state_dict(checkpoint["model_state_dict"])
+
+    # Load optimizer state
+    optimizer.load_state_dict(checkpoint["optimizer_state_dict"])
+
+    # Load scheduler state
+    scheduler.load_state_dict(checkpoint["scheduler_state_dict"])
+
+    # Load scaler state if using AMP
+    if scaler is not None and "scaler_state_dict" in checkpoint:
+        scaler.load_state_dict(checkpoint["scaler_state_dict"])
+
+    # Get training state
+    start_epoch = checkpoint.get("epoch", 0)  # Start from next epoch
+    best_puzzle_accuracy = checkpoint.get("best_puzzle_accuracy", float("-inf"))
+
+    logger.info(
+        f"Resumed from epoch {checkpoint.get('epoch', 0)}, best puzzle accuracy: {best_puzzle_accuracy:.4f}"
+    )
+
+    return start_epoch, best_puzzle_accuracy
+
+
+def save_checkpoint(
+    checkpoint_path, model, optimizer, scheduler, epoch, best_puzzle_accuracy, scaler=None
+):
+    """Save a training checkpoint.
+
+    Args:
+        checkpoint_path: Path where to save the checkpoint
+        model: The model to save
+        optimizer: The optimizer to save
+        scheduler: The learning rate scheduler to save
+        epoch: Current epoch number
+        best_puzzle_accuracy: Best puzzle accuracy achieved so far
+        scaler: Optional GradScaler for AMP training
+    """
+    # Get the underlying model if compiled
+    model_to_save = model._orig_mod if hasattr(model, "_orig_mod") else model
+
+    checkpoint = {
+        "epoch": epoch,
+        "model_state_dict": model_to_save.state_dict(),
+        "optimizer_state_dict": optimizer.state_dict(),
+        "scheduler_state_dict": scheduler.state_dict(),
+        "best_puzzle_accuracy": best_puzzle_accuracy,
+    }
+
+    # Add scaler state if using AMP
+    if scaler is not None:
+        checkpoint["scaler_state_dict"] = scaler.state_dict()
+
+    torch.save(checkpoint, checkpoint_path)
+    logger.info(f"Checkpoint saved to {checkpoint_path}")
+
+
 def train_athena(cfg):
     """Main entry point for training with optimizations."""
     # Init model
@@ -147,12 +228,33 @@ def train_athena(cfg):
     if use_amp:
         logger.info("Using automatic mixed precision (AMP) training")
 
+    # Loss and optimizer
+    criterion = get_loss_function(cfg)
+    optimizer = optim.AdamW(
+        model.parameters(),
+        lr=cfg.lr,
+    )
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=cfg.lr_decay_rate)
+
+    # Load checkpoint if specified
+    start_epoch = 0
+    best_puzzle_accuracy = float("-inf")
+
+    checkpoint_path = cfg.get("resume_from_checkpoint", None)
+    if checkpoint_path:
+        print(f"Loading from checkpoint {checkpoint_path}", flush=True)
+        start_epoch, best_puzzle_accuracy = load_checkpoint(
+            checkpoint_path, model, optimizer, scheduler, scaler
+        )
+
     # Initialize WandB
     if cfg["use_wandb"]:
         wandb.init(
             project="athena_chess",
             config=OmegaConf.to_container(cfg, resolve=True),
             name=model_name,
+            resume="allow" if checkpoint_path else None,
+            id=cfg.get("wandb_run_id", None),  # Optional: specify run ID for exact resume
         )
         wandb.watch(model)
 
@@ -181,14 +283,6 @@ def train_athena(cfg):
         prefetch_factor=2 if num_workers > 0 else None,
     )
 
-    # Loss and optimizer
-    criterion = get_loss_function(cfg)
-    optimizer = optim.AdamW(
-        model.parameters(),
-        lr=cfg.lr,
-    )
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, step_size=1, gamma=cfg.lr_decay_rate)
-
     val_log_frequency = max(1, cfg.val_log_frequency // cfg.batch_size)
     train_log_frequency = max(1, cfg.train_log_frequency // cfg.batch_size)
 
@@ -198,9 +292,7 @@ def train_athena(cfg):
         logger.info(f"Using gradient accumulation with {accumulation_steps} steps")
 
     # Training loop
-    best_puzzle_accuracy = float("-inf")
-
-    for epoch in range(cfg.epochs):
+    for epoch in range(start_epoch, cfg.epochs):
         model.train()
         train_loss = 0.0
         correct = 0
@@ -307,6 +399,7 @@ def train_athena(cfg):
                         "train_loss": avg_loss,
                         "train_accuracy": accuracy,
                         "lr": scheduler.get_last_lr()[0],
+                        "epoch": epoch,
                     }
                 )
 
@@ -421,13 +514,26 @@ def train_athena(cfg):
                 if puzzle_accuracy > best_puzzle_accuracy:
                     best_puzzle_accuracy = puzzle_accuracy
                     os.makedirs("src/athena/checkpoints", exist_ok=True)
-                    model_path = f"src/athena/checkpoints/{model_name}.pt"
 
-                    # Save the underlying model if compiled
+                    # Save checkpoint with full training state
+                    checkpoint_path = f"src/athena/checkpoints/{model_name}_checkpoint.pt"
+                    save_checkpoint(
+                        checkpoint_path,
+                        model,
+                        optimizer,
+                        scheduler,
+                        epoch,
+                        best_puzzle_accuracy,
+                        scaler,
+                    )
+
+                    # Also save just the model weights for inference
+                    model_path = f"src/athena/checkpoints/{model_name}.pt"
                     model_to_save = model._orig_mod if hasattr(model, "_orig_mod") else model
                     torch.save(model_to_save.state_dict(), model_path)
 
                     if cfg.use_wandb:
+                        wandb.save(checkpoint_path)
                         wandb.save(model_path)
                     logger.info(f"New best model saved with puzzle_accuracy: {puzzle_accuracy:.4f}")
 
@@ -436,8 +542,6 @@ def train_athena(cfg):
         scheduler.step()
 
     # Cleanup
-    train_dataset.close()
-    val_dataset.close()
     if cfg.use_wandb:
         wandb.finish()
 
