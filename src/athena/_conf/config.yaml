@@ -18,4 +18,4 @@ max_puzzles: 10000
 device: "auto"
 K: 128
 M: 32
-resume_from_checkpoint: "src/athena/checkpoints/2.25_transformer_Full large transformer run_checkpoint.pt"
+resume_from_checkpoint: "/home/jkgao/athena/src/athena/checkpoints/2.25_transformer_Full large transformer run_best_checkpoint.pt"

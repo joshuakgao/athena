@@ -124,7 +124,7 @@ def custom_collate_fn(batch):
 
 
 def load_checkpoint(checkpoint_path, model, optimizer, scheduler, scaler=None):
-    """Load checkpoint and return the starting epoch and best accuracy.
+    """Load checkpoint and return the starting epoch, batch, and best accuracy.
 
     Args:
         checkpoint_path: Path to the checkpoint file
@@ -134,11 +134,11 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, scaler=None):
         scaler: Optional GradScaler for AMP training
 
     Returns:
-        tuple: (start_epoch, best_puzzle_accuracy)
+        tuple: (start_epoch, start_batch, best_puzzle_accuracy, global_step)
     """
     if not os.path.exists(checkpoint_path):
         logger.warning(f"Checkpoint not found at {checkpoint_path}. Starting from scratch.")
-        return 0, float("-inf")
+        return 0, 0, float("-inf"), 0
 
     logger.info(f"Loading checkpoint from {checkpoint_path}...")
     checkpoint = torch.load(checkpoint_path, map_location=model.device)
@@ -161,18 +161,29 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, scaler=None):
         scaler.load_state_dict(checkpoint["scaler_state_dict"])
 
     # Get training state
-    start_epoch = checkpoint.get("epoch", 0)  # Start from next epoch
+    start_epoch = checkpoint.get("epoch", 0)
+    start_batch = checkpoint.get("batch_idx", 0) + 1  # Start from next batch
     best_puzzle_accuracy = checkpoint.get("best_puzzle_accuracy", float("-inf"))
+    global_step = checkpoint.get("global_step", 0)
 
     logger.info(
-        f"Resumed from epoch {checkpoint.get('epoch', 0)}, best puzzle accuracy: {best_puzzle_accuracy:.4f}"
+        f"Resumed from epoch {start_epoch}, batch {start_batch}, "
+        f"global step {global_step}, best puzzle accuracy: {best_puzzle_accuracy:.4f}"
     )
 
-    return start_epoch, best_puzzle_accuracy
+    return start_epoch, start_batch, best_puzzle_accuracy, global_step
 
 
 def save_checkpoint(
-    checkpoint_path, model, optimizer, scheduler, epoch, best_puzzle_accuracy, scaler=None
+    checkpoint_path,
+    model,
+    optimizer,
+    scheduler,
+    epoch,
+    batch_idx,
+    best_puzzle_accuracy,
+    global_step,
+    scaler=None,
 ):
     """Save a training checkpoint.
 
@@ -182,7 +193,9 @@ def save_checkpoint(
         optimizer: The optimizer to save
         scheduler: The learning rate scheduler to save
         epoch: Current epoch number
+        batch_idx: Current batch index within the epoch
         best_puzzle_accuracy: Best puzzle accuracy achieved so far
+        global_step: Total number of training steps taken
         scaler: Optional GradScaler for AMP training
     """
     # Get the underlying model if compiled
@@ -190,6 +203,8 @@ def save_checkpoint(
 
     checkpoint = {
         "epoch": epoch,
+        "batch_idx": batch_idx,
+        "global_step": global_step,
         "model_state_dict": model_to_save.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "scheduler_state_dict": scheduler.state_dict(),
@@ -201,7 +216,7 @@ def save_checkpoint(
         checkpoint["scaler_state_dict"] = scaler.state_dict()
 
     torch.save(checkpoint, checkpoint_path)
-    logger.info(f"Checkpoint saved to {checkpoint_path}")
+    logger.info(f"Checkpoint saved to {checkpoint_path} at epoch {epoch}, batch {batch_idx}")
 
 
 def train_athena(cfg):
@@ -238,12 +253,13 @@ def train_athena(cfg):
 
     # Load checkpoint if specified
     start_epoch = 0
+    start_batch = 0
     best_puzzle_accuracy = float("-inf")
+    global_step = 0
 
     checkpoint_path = cfg.get("resume_from_checkpoint", None)
     if checkpoint_path:
-        print(f"Loading from checkpoint {checkpoint_path}", flush=True)
-        start_epoch, best_puzzle_accuracy = load_checkpoint(
+        start_epoch, start_batch, best_puzzle_accuracy, global_step = load_checkpoint(
             checkpoint_path, model, optimizer, scheduler, scaler
         )
 
@@ -291,6 +307,9 @@ def train_athena(cfg):
     if accumulation_steps > 1:
         logger.info(f"Using gradient accumulation with {accumulation_steps} steps")
 
+    # Auto-checkpoint configuration
+    save_checkpoint_every_n_steps = cfg.get("save_checkpoint_every_n_steps", 1000)
+
     # Training loop
     for epoch in range(start_epoch, cfg.epochs):
         model.train()
@@ -301,6 +320,10 @@ def train_athena(cfg):
         # Training phase with periodic validation
         pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{cfg.epochs}")
         for batch_idx, (fens, moves, win_probs, mates) in enumerate(pbar):
+            # Skip batches until we reach the starting point (for resumed training)
+            if epoch == start_epoch and batch_idx < start_batch:
+                continue
+
             # Skip batches with None win probabilities (if any)
             if win_probs[0] is None:
                 continue
@@ -371,6 +394,7 @@ def train_athena(cfg):
                 else:
                     optimizer.step()
                 optimizer.zero_grad()
+                global_step += 1
 
             # Calculate accuracy
             with torch.no_grad():
@@ -389,6 +413,7 @@ def train_athena(cfg):
                     "loss": avg_loss,
                     "acc": accuracy,
                     "lr": scheduler.get_last_lr()[0],
+                    "step": global_step,
                 }
             )
 
@@ -400,8 +425,28 @@ def train_athena(cfg):
                         "train_accuracy": accuracy,
                         "lr": scheduler.get_last_lr()[0],
                         "epoch": epoch,
+                        "global_step": global_step,
                     }
                 )
+
+            # Save periodic checkpoints based on steps
+            if global_step % save_checkpoint_every_n_steps == 0:
+                os.makedirs("src/athena/checkpoints", exist_ok=True)
+                periodic_checkpoint_path = (
+                    f"src/athena/checkpoints/{model_name}_step_{global_step}.pt"
+                )
+                save_checkpoint(
+                    periodic_checkpoint_path,
+                    model,
+                    optimizer,
+                    scheduler,
+                    epoch,
+                    batch_idx,
+                    best_puzzle_accuracy,
+                    global_step,
+                    scaler,
+                )
+                logger.info(f"Periodic checkpoint saved at step {global_step}")
 
             # Perform validation at regular intervals
             if batch_idx % val_log_frequency == 0:
@@ -507,6 +552,7 @@ def train_athena(cfg):
                             "val_accuracy": val_accuracy,
                             "puzzle_accuracy": puzzle_accuracy,
                             "epoch": epoch,
+                            "global_step": global_step,
                         }
                     )
 
@@ -516,14 +562,16 @@ def train_athena(cfg):
                     os.makedirs("src/athena/checkpoints", exist_ok=True)
 
                     # Save checkpoint with full training state
-                    checkpoint_path = f"src/athena/checkpoints/{model_name}_checkpoint.pt"
+                    checkpoint_path = f"src/athena/checkpoints/{model_name}_best_checkpoint.pt"
                     save_checkpoint(
                         checkpoint_path,
                         model,
                         optimizer,
                         scheduler,
                         epoch,
+                        batch_idx,
                         best_puzzle_accuracy,
+                        global_step,
                         scaler,
                     )
 
@@ -538,6 +586,10 @@ def train_athena(cfg):
                     logger.info(f"New best model saved with puzzle_accuracy: {puzzle_accuracy:.4f}")
 
                 model.train()
+
+        # Reset start_batch after first epoch completes
+        if epoch == start_epoch:
+            start_batch = 0
 
         scheduler.step()
 
