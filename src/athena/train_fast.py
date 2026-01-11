@@ -262,6 +262,9 @@ def train_athena(cfg):
         start_epoch, start_batch, best_puzzle_accuracy, global_step = load_checkpoint(
             checkpoint_path, model, optimizer, scheduler, scaler
         )
+        logger.info(f"Optimizer learning rate after loading: {optimizer.param_groups[0]['lr']}")
+        logger.info(f"Scheduler last epoch: {scheduler.last_epoch}")
+        logger.info(f"Model in training mode: {model.training}")
 
     # Initialize WandB
     if cfg["use_wandb"]:
@@ -316,6 +319,9 @@ def train_athena(cfg):
         train_loss = 0.0
         correct = 0
         total = 0
+
+        # Adjust batch counter for resumed training to compute correct averages
+        batch_offset = start_batch if epoch == start_epoch else 0
 
         # Training phase with periodic validation
         pbar = tqdm(train_loader, desc=f"Epoch {epoch + 1}/{cfg.epochs}")
@@ -405,8 +411,9 @@ def train_athena(cfg):
 
             # Update statistics
             train_loss += loss.item() * accumulation_steps
-            avg_loss = train_loss / (batch_idx + 1)
-            accuracy = correct / total
+            # Calculate average loss accounting for skipped batches
+            avg_loss = train_loss / (batch_idx - batch_offset + 1)
+            accuracy = correct / total if total > 0 else 0.0
 
             pbar.set_postfix(
                 {
@@ -414,6 +421,7 @@ def train_athena(cfg):
                     "acc": accuracy,
                     "lr": scheduler.get_last_lr()[0],
                     "step": global_step,
+                    "batch": f"{batch_idx}/{len(train_loader)}",
                 }
             )
 
@@ -422,10 +430,12 @@ def train_athena(cfg):
                 wandb.log(
                     {
                         "train_loss": avg_loss,
+                        "train_loss_raw": loss.item() * accumulation_steps,
                         "train_accuracy": accuracy,
                         "lr": scheduler.get_last_lr()[0],
                         "epoch": epoch,
                         "global_step": global_step,
+                        "batch_idx": batch_idx,
                     }
                 )
 
