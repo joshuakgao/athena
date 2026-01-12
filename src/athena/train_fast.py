@@ -164,7 +164,7 @@ def load_checkpoint(checkpoint_path, model, optimizer, scheduler, scaler=None):
     start_epoch = checkpoint.get("epoch", 0)
     start_batch = checkpoint.get("batch_idx", 0) + 1  # Start from next batch
     best_puzzle_accuracy = checkpoint.get("best_puzzle_accuracy", float("-inf"))
-    global_step = checkpoint.get("global_step", 0)
+    global_step = checkpoint.get("global_step", 0) + 1
 
     logger.info(
         f"Resumed from epoch {start_epoch}, batch {start_batch}, "
@@ -256,12 +256,14 @@ def train_athena(cfg):
     start_batch = 0
     best_puzzle_accuracy = float("-inf")
     global_step = 0
+    resumed_from_checkpoint = False
 
     checkpoint_path = cfg.get("resume_from_checkpoint", None)
     if checkpoint_path:
         start_epoch, start_batch, best_puzzle_accuracy, global_step = load_checkpoint(
             checkpoint_path, model, optimizer, scheduler, scaler
         )
+        resumed_from_checkpoint = True
         logger.info(f"Optimizer learning rate after loading: {optimizer.param_groups[0]['lr']}")
         logger.info(f"Scheduler last epoch: {scheduler.last_epoch}")
         logger.info(f"Model in training mode: {model.training}")
@@ -459,7 +461,13 @@ def train_athena(cfg):
                 logger.info(f"Periodic checkpoint saved at step {global_step}")
 
             # Perform validation at regular intervals
-            if batch_idx % val_log_frequency == 0:
+            # Skip validation on the first batch if we just resumed from a checkpoint
+            should_validate = batch_idx % val_log_frequency == 0
+            skip_first_validation = (
+                resumed_from_checkpoint and epoch == start_epoch and batch_idx == start_batch
+            )
+
+            if should_validate and not skip_first_validation:
                 model.eval()
                 val_loss = 0.0
                 val_correct = 0
@@ -596,6 +604,10 @@ def train_athena(cfg):
                     logger.info(f"New best model saved with puzzle_accuracy: {puzzle_accuracy:.4f}")
 
                 model.train()
+
+            # After first validation check, clear the flag
+            if resumed_from_checkpoint and epoch == start_epoch and batch_idx == start_batch:
+                resumed_from_checkpoint = False
 
         # Reset start_batch after first epoch completes
         if epoch == start_epoch:
