@@ -30,19 +30,19 @@ CONFIG_DICT = {
         "output_encoder": {"type": "win_prob"},
     },
     "use_wandb": True,
-    "model_version": '2.24',
+    "model_version": '2.25',
     "description": 'Full large transformer run.',
     "epochs": 3,
     "lr": 0.0001,
     "lr_decay_rate": 1,
-    "batch_size": 256,
+    "batch_size": 512,
     "val_log_frequency": 33554432,
     "train_log_frequency": 2097152,
     "max_val_samples": 100000,
     "max_puzzles": 10000,
-    "device": "cpu", # Set to CPU for safe engine initialization
+    "device": "cuda" if torch.cuda.is_available() else "cpu",
     "K": 128, # Output bins size
-    "M": 16,
+    "M": 32,
 }
 cfg = OmegaConf.create(CONFIG_DICT)
 
@@ -51,10 +51,10 @@ class AthenaEngine(MinimalEngine):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        model_path = "src/athena/checkpoints/2.24_transformer_Full large transformer run..pt"
+        model_path = "src/athena/checkpoints/2.25_transformer_Full large transformer run_best_checkpoint.pt"
         self.model = get_model(cfg)
-        self.model.load_state_dict(torch.load(model_path, map_location="cpu"))
-        self.model.to("cpu")
+        self.model.load_state_dict(torch.load(model_path, map_location=cfg.device)["model_state_dict"])
+        self.model.to(cfg.device)
         self.model.eval()
         self.position_counts = defaultdict(int)
 
@@ -109,15 +109,17 @@ class AthenaEngine(MinimalEngine):
         
         # Convert to tensors and run through model
         with torch.no_grad():
-            fen_tokens_batch = torch.stack([torch.tensor(ft) for ft in fen_tokens_list])
-            move_tokens_batch = torch.stack([torch.tensor(mt) for mt in move_tokens_list])
+            device = cfg.device
+
+            fen_tokens_batch = torch.stack([torch.tensor(ft, device=device) for ft in fen_tokens_list])
+            move_tokens_batch = torch.stack([torch.tensor(mt, device=device) for mt in move_tokens_list])
             
             outputs = self.model(fen_tokens_batch, move_tokens_batch)
-        
-        # Find the move with the largest output bin index
-        bin_indices = outputs.argmax(dim=1)
-        best_idx = bin_indices.argmax().item()
-        best_bin_value = bin_indices[best_idx].item()
+            
+            # Find the move with the largest output bin index
+            bin_indices = outputs.argmax(dim=1).to("cpu")  # CPU for Python indexing
+            best_idx = bin_indices.argmax().item()
+            best_bin_value = bin_indices[best_idx].item()
         
         # Check if we're winning
         if self.is_winning(best_bin_value, cfg.K):

@@ -18,6 +18,6 @@ max_puzzles: 10000
 device: "auto"
 K: 128
 M: 32
-resume_from_checkpoint: "/home/jkgao/athena/src/athena/checkpoints/2.25_transformer_Full large transformer run_step_32768.pt"
+resume_from_checkpoint: "src/athena/checkpoints/2.25_transformer_Full large transformer run_step_3424256.pt"
 save_checkpoint_every_n_steps: 16384
-wandb_run_id: "vpx80wrt"
+wandb_run_id: "76tfvan6"
