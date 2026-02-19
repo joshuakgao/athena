@@ -60,15 +60,6 @@ class AthenaEngine(MinimalEngine):
 
         self.input_encoder = get_input_encoder(cfg)
 
-    def is_winning(self, best_bin_index: int, K: int = 128) -> bool:
-        """
-        Determine if Athena is winning based on the output bin index.
-        Higher bin indices indicate better positions for the side to move.
-        """
-        # Consider winning if in top 25% of bins
-        winning_threshold = K * 0.33
-        return best_bin_index > winning_threshold
-
     def would_cause_repetition(self, board: chess.Board, move: chess.Move) -> bool:
         """
         Check if making this move would lead to a position we've seen recently.
@@ -115,30 +106,11 @@ class AthenaEngine(MinimalEngine):
             move_tokens_batch = torch.stack([torch.tensor(mt, device=device) for mt in move_tokens_list])
             
             outputs = self.model(fen_tokens_batch, move_tokens_batch)
-            
-            # Find the move with the largest output bin index
-            bin_indices = outputs.argmax(dim=1).to("cpu")  # CPU for Python indexing
-            best_idx = bin_indices.argmax().item()
-            best_bin_value = bin_indices[best_idx].item()
         
-        # Check if we're winning
-        if self.is_winning(best_bin_value, cfg.K):
-            # Sort moves by score (descending)
-            sorted_indices = bin_indices.argsort(descending=True)
-            
-            # Try to find a good move that doesn't repeat
-            for idx in sorted_indices:
-                candidate_move = legal_moves[idx.item()]
-                if not self.would_cause_repetition(board, candidate_move):
-                    best_move = candidate_move
-                    logger.info(f"Avoiding repetition: selected move with bin {bin_indices[idx].item()} instead of {best_bin_value}")
-                    break
-            else:
-                # If all moves lead to repetition, just take the best
-                best_move = legal_moves[best_idx]
-                logger.warning("All moves lead to repetition, selecting best move anyway")
-        else:
-            best_move = legal_moves[best_idx]
+        # Find the move with the largest output bin index
+        bin_indices = outputs.argmax(dim=1).to("cpu")  # CPU for Python indexing
+        best_idx = bin_indices.argmax().item()
+        best_move = legal_moves[best_idx]
         
         # Update position count after making the move
         board.push(best_move)
