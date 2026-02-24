@@ -5,8 +5,8 @@ defaults:
   - encoder/output_encoder: win_prob
 
 use_wandb: true
-model_version: "2.25"
-description: "Full large transformer run"
+model_version: "2.26"
+description: "TryingWayMoreBins"
 epochs: 3
 lr: 0.0001 # 0.0001 is a good starting point
 lr_decay_rate: 1
@@ -16,8 +16,8 @@ train_log_frequency: 2097152
 max_val_samples: 100000
 max_puzzles: 10000
 device: "auto"
-K: 128
+K: 1024
 M: 32
-resume_from_checkpoint: "src/athena/checkpoints/2.25_transformer_Full large transformer run_step_3424256.pt"
+# resume_from_checkpoint: "src/athena/checkpoints/2.25_transformer_Full large transformer run_step_3424256.pt"
 save_checkpoint_every_n_steps: 16384
-wandb_run_id: "76tfvan6"
+# wandb_run_id: "76tfvan6"
