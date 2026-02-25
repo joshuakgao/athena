@@ -1,6 +1,7 @@
 from collections import defaultdict
 import logging
 import math
+import random
 
 import torch
 import chess
@@ -8,7 +9,6 @@ import chess.engine
 from chess.engine import Limit, PlayResult
 from lib.engine_wrapper import MinimalEngine
 from lib.lichess_types import MOVE
-
 from athena.module_registry import (
     get_input_encoder,
     get_model,
@@ -53,7 +53,7 @@ class AthenaEngine(MinimalEngine):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        model_path = "src/athena/checkpoints/2.25_transformer_Full large transformer run_best_checkpoint.pt"
+        model_path = "src/athena/checkpoints/2.25_transformer_Full large transformer run_step_7667712.pt"
         self.model = get_model(cfg)
         self.model.load_state_dict(torch.load(model_path, map_location=cfg.device)["model_state_dict"])
         self.model.to(cfg.device)
@@ -61,6 +61,8 @@ class AthenaEngine(MinimalEngine):
         self.position_counts = defaultdict(int)
         self.input_encoder = get_input_encoder(cfg)
         self.stockfish = chess.engine.SimpleEngine.popen_uci("models/stockfish")
+        self.stockfish_takeover_pct = 0.95
+        self.opening_top_n = 5
 
     def would_cause_repetition(self, board: chess.Board, move: chess.Move) -> bool:
         board.push(move)
@@ -104,8 +106,20 @@ class AthenaEngine(MinimalEngine):
                 logger.info(f"Move {move.uci()} would cause repetition, setting to middle bin {middle_bin}")
                 bin_indices[i] = middle_bin
 
+        # Opening diversity: sample from top N Athena moves on move 0 or 1
+        if len(board.move_stack) in (0, 1):
+            sorted_indices = bin_indices.argsort(descending=True)
+            top_indices = sorted_indices[: min(self.opening_top_n, len(sorted_indices))]
+            candidate_moves = [legal_moves[i.item()] for i in top_indices]
+
+            chosen_move = random.choice(candidate_moves)
+            logger.info(
+                f"Athena opening sampling from top {len(candidate_moves)} moves: {chosen_move.uci()}"
+            )
+            return PlayResult(chosen_move, None, draw_offered=draw_offered)
+
         # Get top 5 moves by bin score
-        top5_threshold = cfg.K * 0.99
+        top5_threshold = cfg.K * self.stockfish_takeover_pct
         sorted_indices = bin_indices.argsort(descending=True)
         top5_indices = sorted_indices[:5]
         top5_bins = [bin_indices[i].item() for i in top5_indices]
@@ -115,45 +129,35 @@ class AthenaEngine(MinimalEngine):
         # then double-check with Stockfish win probability
         if all(b > top5_threshold for b in top5_bins):
             logger.info(f"All top 5 moves above 99% Athena threshold (bins: {top5_bins}), verifying with Stockfish...")
-            stockfish_confirmed_moves = []
             mover = board.turn
 
-            for move in top5_moves:
-                board.push(move)
+            if board.is_checkmate():
+                win_prob = 1.0
+            else:
+                info = self.stockfish.analyse(board, Limit(time=0.5))
+                pov_score = info["score"].pov(mover) # type: ignore
 
-                if board.is_checkmate():
-                    win_prob = 1.0
+                if pov_score.is_mate():
+                    mate_val = pov_score.mate()
+                    assert mate_val is not None, "Mate value should not be None for mate scores"
+                    win_prob = 1.0 if mate_val > 0 else 0.0
                 else:
-                    info = self.stockfish.analyse(board, Limit(time=0.1))
-                    pov_score = info["score"].pov(mover) # type: ignore
+                    cp = pov_score.score()
+                    assert cp is not None, "Centipawn score should not be None for non-mate scores"
+                    win_prob = 1 / (1 + math.exp(-cp / 173.718))
+                    win_prob = min(max(win_prob, 1e-6), 1 - 1e-6)
 
-                    if pov_score.is_mate():
-                        mate_val = pov_score.mate()
-                        assert mate_val is not None, "Mate value should not be None for mate scores"
-                        win_prob = 1.0 if mate_val > 0 else 0.0
-                    else:
-                        cp = pov_score.score()
-                        assert cp is not None, "Centipawn score should not be None for non-mate scores"
-                        win_prob = 1 / (1 + math.exp(-cp / 173.718))
-                        win_prob = min(max(win_prob, 1e-6), 1 - 1e-6)
+                logger.info(f"Stockfish eval for current position: win_prob={win_prob:.4f}")
 
-                board.pop()
-                logger.info(f"Stockfish eval for {move.uci()}: win_prob={win_prob:.4f}")
-
-                if win_prob >= 0.99:
-                    stockfish_confirmed_moves.append(move)
-
-            if stockfish_confirmed_moves:
-                logger.info(f"Stockfish confirmed {len(stockfish_confirmed_moves)} moves above 99%, deferring to Stockfish")
+            if win_prob > self.stockfish_takeover_pct:
                 result = self.stockfish.play(
                     board,
-                    Limit(time=1.0),
-                    root_moves=stockfish_confirmed_moves,
+                    Limit(time=0.5),
                 )
                 best_move = result.move
                 logger.info(f"Stockfish selected: {best_move.uci()}")  # type: ignore
             else:
-                logger.info("Stockfish found no moves above 99%, falling back to Athena's top move")
+                logger.info("Stockfish eval not above 99%, falling back to Athena's top move")
                 best_move = legal_moves[bin_indices.argmax().item()]
         else:
             best_move = legal_moves[bin_indices.argmax().item()]
