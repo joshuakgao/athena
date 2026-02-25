@@ -7,12 +7,12 @@ import hydra
 import pandas as pd
 import torch
 import torch.optim as optim
+import wandb
 from omegaconf import DictConfig, OmegaConf
 from torch.cuda.amp import GradScaler, autocast
 from torch.utils.data import DataLoader
 from tqdm import tqdm
 
-import wandb
 from athena.datasets.chessbenchmate.dataset import ChessbenchDataset
 from athena.encoders._base_encoder import BaseEncoder
 from athena.module_registry import (
@@ -353,7 +353,10 @@ def train_athena(cfg):
                     )
                 inputs.append(input_encoding)
 
-                if cfg.encoder.output_encoder.type == "win_prob":
+                if (
+                    cfg.encoder.output_encoder.type == "win_prob"
+                    or cfg.encoder.output_encoder.type == "arcsin_win_prob"
+                ):
                     target_encoding = torch.from_numpy(
                         output_encoder.encode(win_prob, mate)
                     ).float()

@@ -3,7 +3,7 @@
 from athena.architectures import AthenaResnet, AthenaTransformer, AthenaViT
 from athena.encoders._base_encoder import BaseEncoder
 from athena.encoders.input_encoders import ActionEncoder, ActionTokenizer
-from athena.encoders.output_encoders import WinProbEncoder
+from athena.encoders.output_encoders import ArcsinWinProbEncoder, WinProbEncoder
 from athena.loss_functions import CrossEntropyLoss, HLGaussLoss
 
 ARCHITECTURES = {
@@ -19,6 +19,7 @@ INPUT_ENCODERS = {
 
 OUTPUT_ENCODERS = {
     "win_prob": WinProbEncoder,
+    "arcsin_win_prob": ArcsinWinProbEncoder,
 }
 
 LOSS_FUNCTIONS = {
