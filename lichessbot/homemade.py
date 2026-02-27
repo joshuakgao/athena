@@ -29,7 +29,7 @@ CONFIG_DICT = {
     "loss_function": {"type": "cross_entropy"},
     "encoder": {
         "input_encoder": {"type": "action_tokenizer"}, # Crucial: action_tokenizer
-        "output_encoder": {"type": "win_prob"},
+        "output_encoder": {"type": "arcsin_win_prob"},
     },
     "use_wandb": True,
     "model_version": '2.25',
@@ -43,7 +43,7 @@ CONFIG_DICT = {
     "max_val_samples": 100000,
     "max_puzzles": 10000,
     "device": "cuda" if torch.cuda.is_available() else "cpu",
-    "K": 1024, # Output bins size
+    "K": 128, # Output bins size
     "M": 32,
 }
 cfg = OmegaConf.create(CONFIG_DICT)
@@ -53,23 +53,21 @@ class AthenaEngine(MinimalEngine):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        model_path = "src/athena/checkpoints/2.26_transformer_TryingWayMoreBins_step_262144.pt"
+        model_path = "src/athena/checkpoints/2.27_transformer_TryingArcsinWinProbs_step_425984.pt"
         self.model = get_model(cfg)
         self.model.load_state_dict(torch.load(model_path, map_location=cfg.device)["model_state_dict"])
         self.model.to(cfg.device)
         self.model.eval()
-        self.position_counts = defaultdict(int)
         self.input_encoder = get_input_encoder(cfg)
         self.opening_top_n_w = 5
         self.opening_top_n_b = 2
 
     def would_cause_repetition(self, board: chess.Board, move: chess.Move) -> bool:
         board.push(move)
-        position_fen = board.fen().split(' ')[0]
-        count = self.position_counts[position_fen]
+        is_repetition = board.is_repetition(2)
         board.pop()
-        return count >= 3
-    
+        return is_repetition
+
     def search(
         self,
         board: chess.Board,
@@ -99,7 +97,7 @@ class AthenaEngine(MinimalEngine):
             bin_indices = outputs.argmax(dim=1).to("cpu")
 
         # Penalize repetition moves by setting them to the middle bin
-        middle_bin = cfg.K // 2
+        middle_bin = cfg.K // 2 + cfg.M
         for i, move in enumerate(legal_moves):
             if self.would_cause_repetition(board, move):
                 logger.info(f"Move {move.uci()} would cause repetition, setting to middle bin {middle_bin}")
@@ -121,24 +119,14 @@ class AthenaEngine(MinimalEngine):
             logger.info(
                 f"Athena opening sampling from top {len(candidate_moves)} moves: {chosen_move.uci()}"
             )
-            return PlayResult(chosen_move, None, draw_offered=draw_offered)
+            return PlayResult(chosen_move, None)
 
         # Get top 5 moves by bin score
         sorted_indices = bin_indices.argsort(descending=True)
-        top5_indices = sorted_indices[:5]
-        top5_moves = [legal_moves[i.item()] for i in top5_indices]
-        best_move = top5_moves[0]
+        best_move = legal_moves[sorted_indices[0]]
+        logger.info(f"Best move (bin {bin_indices[sorted_indices[0]]}): {best_move}")
 
-        # Update position count after making the move
-        assert best_move is not None
-        board.push(best_move)
-        position_fen = board.fen().split(' ')[0]
-        self.position_counts[position_fen] += 1
-        board.pop()
-
-        return PlayResult(best_move, None, draw_offered=draw_offered)
-
-
+        return PlayResult(best_move, None)
 
 # class AthenaEngine(MinimalEngine):
 #     """Athena model-based engine that scores all legal moves and selects the best."""
