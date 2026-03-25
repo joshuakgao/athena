@@ -4,13 +4,13 @@ defaults:
   - encoder/input_encoder: action_tokenizer
   - encoder/output_encoder: arcsin_win_prob
 
-use_wandb: false
-model_version: "2.27"
-description: "TryingArcsinWinProbs"
-epochs: 3
+use_wandb: true
+model_version: "2.25"
+description: "Full large transformer run"
+epochs: 1
 lr: 0.0001 # 0.0001 is a good starting point
 lr_decay_rate: 1
-batch_size: 32
+batch_size: 512
 val_log_frequency: 33554432
 train_log_frequency: 2097152
 max_val_samples: 100000
@@ -18,6 +18,6 @@ max_puzzles: 10000
 device: "auto"
 K: 128
 M: 32
-# resume_from_checkpoint: "src/athena/checkpoints/2.25_transformer_Full large transformer run_step_3424256.pt"
+resume_from_checkpoint: "src/athena/checkpoints/2.25_transformer_Full large transformer run_step_8339456.pt"
 save_checkpoint_every_n_steps: 16384
-# wandb_run_id: "76tfvan6"
+wandb_run_id: "76tfvan6"

@@ -53,7 +53,7 @@ class AthenaEngine(MinimalEngine):
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        model_path = "src/athena/checkpoints/2.27_transformer_TryingArcsinWinProbs_step_425984.pt"
+        model_path = "src/athena/checkpoints/2.25_transformer_Full large transformer run_best_checkpoint.pt"
         self.model = get_model(cfg)
         self.model.load_state_dict(torch.load(model_path, map_location=cfg.device)["model_state_dict"])
         self.model.to(cfg.device)
