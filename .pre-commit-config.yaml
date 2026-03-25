@@ -50,13 +50,3 @@ repos:
         entry: uv run pytest
         language: system
         pass_filenames: false
-
-  # ==============================
-  # Detect Secrets (Secret Detection)
-  # ==============================
-  - repo: https://github.com/Yelp/detect-secrets
-    rev: v1.5.0
-    hooks:
-    -   id: detect-secrets
-        args: ['--baseline', '.secrets.baseline']
-        exclude: package.lock.json

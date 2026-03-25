@@ -15,4 +15,8 @@ python src/athena/train.py
 
 ## Demo on Lichess
 
-Create a copy of `config.yml.default` and name it `config.yml`. Then change your lichess token.
+Create a copy of `config.yml.default` and name it `config.yml`. Then change your lichess token. Then in "lichessbot/homemade.py", adjust the Athena model config to fit your model parameters and update the model path.
+
+```bash
+python lichessbot/lichess-bot.py
+```
