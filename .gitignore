@@ -12,3 +12,4 @@ slurm_jobs/
 outputs/
 src/athena/datasets/chessbench/data
 src/athena/datasets/chessbenchmate
+.venv
