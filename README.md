@@ -18,5 +18,11 @@ python src/athena/train.py
 Create a copy of `config.yml.default` and name it `config.yml`. Then change your lichess token. Then in "lichessbot/homemade.py", adjust the Athena model config to fit your model parameters and update the model path.
 
 ```bash
+# Download pretrained Athena weights
+mkdir src/athena/checkpoints
+wget https://huggingface.co/joshuakgao/athena-chess/resolve/main/athena.pt
+mv athena.pt src/athena/checkpoints
+
+# Host model on Lichess
 python lichessbot/lichess-bot.py
 ```
