@@ -49,16 +49,27 @@ CONFIG_DICT = {
 cfg = OmegaConf.create(CONFIG_DICT)
 
 class AthenaEngine(MinimalEngine):
-    """Athena model-based engine that scores all legal moves and selects the best."""
+    _model = None
+    _input_encoder = None
+
+    @classmethod
+    def _load_shared_resources(cls):
+        if cls._model is None:
+            model_path = "src/athena/checkpoints/athena.pt"
+            cls._model = get_model(cfg)
+            cls._model.load_state_dict(
+                torch.load(model_path, map_location=cfg.device)["model_state_dict"]
+            )
+            cls._model.to(cfg.device)
+            cls._model.eval()
+        if cls._input_encoder is None:
+            cls._input_encoder = get_input_encoder(cfg)
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
-        model_path = "src/athena/checkpoints/athena.pt"
-        self.model = get_model(cfg)
-        self.model.load_state_dict(torch.load(model_path, map_location=cfg.device)["model_state_dict"])
-        self.model.to(cfg.device)
-        self.model.eval()
-        self.input_encoder = get_input_encoder(cfg)
+        AthenaEngine._load_shared_resources()
+        self.model = AthenaEngine._model
+        self.input_encoder = AthenaEngine._input_encoder
         self.opening_top_n_w = 5
         self.opening_top_n_b = 2
 
