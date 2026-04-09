@@ -197,6 +197,7 @@ matchmaking:
   challenge_initial_time: # Initial time in seconds of the challenge (to be chosen at random).
     - 60
     - 180
+    - 300
     - 600
     - 1800
   challenge_increment: # Increment in seconds of the challenge (to be chosen at random).
