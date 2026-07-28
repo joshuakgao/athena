@@ -4,7 +4,7 @@ defaults:
   - encoder/input_encoder: action_tokenizer
   - encoder/output_encoder: win_prob
 
-use_wandb: false
+use_wandb: true
 model_version: "2.33"
 description: "subset_small_run"
 epochs: 1
