@@ -6,8 +6,11 @@ My attempt at a deep learning chess bot.
 
 ```bash
 uv sync
+uv pip install torch --torch-backend=auto
 source .venv/bin/activate
 cd src/athena/datasets
+mkdir chessbenchmate
+cd chessbenchmate
 hf download joshuakgao/chessbenchmate --repo-type dataset --local-dir . --max-workers 1
 cd ../../..
 python src/athena/train.py
