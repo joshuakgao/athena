@@ -15,9 +15,9 @@ and ``WinProbEncoder.decode`` without guessing.
 
 Example:
     uv run python -m athena.export_onnx \
-        --checkpoint src/athena/checkpoints/2.33_transformer_full_nano_run_best_checkpoint.pt \
+        --checkpoint src/athena/checkpoints/2.33_transformer_full_small_run_best_checkpoint.pt \
         --out web/public/models \
-        --name athena-nano
+        --name athena-small
 
     # architecture must match the checkpoint; override it the same way you would train
     uv run python -m athena.export_onnx --checkpoint ... --override architecture=transformer/large
@@ -134,7 +134,7 @@ def check_cfg_matches_checkpoint(cfg, state_dict: dict) -> None:
             f"Config does not match the checkpoint ({details}).\n"
             f"Checkpoint looks like width={found['width']}, depth={found['depth']}, "
             f"output_bins={found['output_bins']}.\n"
-            "Pass the right architecture, e.g. --override architecture=transformer/nano"
+            "Pass the right architecture, e.g. --override architecture=transformer/small"
         )
     # Head count is not recoverable from shapes; a wrong value still loads but scores garbage.
     logger.info(
@@ -332,7 +332,7 @@ def parse_args() -> argparse.Namespace:
         action="append",
         default=[],
         metavar="KEY=VALUE",
-        help="Hydra override, repeatable (e.g. architecture=transformer/nano)",
+        help="Hydra override, repeatable (e.g. architecture=transformer/small)",
     )
     parser.add_argument("--opset", type=int, default=DEFAULT_OPSET, help="ONNX opset version")
     parser.add_argument(

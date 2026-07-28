@@ -1,6 +1,0 @@
-type: transformer
-size: nano
-
-depth: 3
-width: 128
-heads: 2
