@@ -13,3 +13,4 @@ outputs/
 src/athena/datasets/chessbench/data
 src/athena/datasets/chessbenchmate
 .venv
+src/athena/exports
